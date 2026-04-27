@@ -27,6 +27,7 @@ const (
 type Link struct {
 	Name   string `json:"name"`
 	Path   string `json:"path,omitempty"`   // for static/php; empty for proxy
+	Root   string `json:"root,omitempty"`   // optional docroot override (rel to Path or absolute)
 	Target string `json:"target,omitempty"` // for proxy: "host:port"
 	PHP    string `json:"php,omitempty"`    // pinned version; empty = use default
 	Secure bool   `json:"secure"`
@@ -90,12 +91,12 @@ func (s *State) Resolve() []Resolved {
 				continue
 			}
 			p := filepath.Join(dir, e.Name())
-			r := build(e.Name(), p, "", "", true, s.DefaultPHP)
+			r := build(e.Name(), p, "", "", "", true, s.DefaultPHP)
 			seen[r.Name] = r
 		}
 	}
 	for _, l := range s.Links {
-		r := build(l.Name, l.Path, l.Target, l.PHP, l.Secure, s.DefaultPHP)
+		r := build(l.Name, l.Path, l.Root, l.Target, l.PHP, l.Secure, s.DefaultPHP)
 		seen[r.Name] = r
 	}
 
@@ -107,7 +108,7 @@ func (s *State) Resolve() []Resolved {
 	return out
 }
 
-func build(name, path, target, php string, secure bool, defaultPHP string) Resolved {
+func build(name, path, root, target, php string, secure bool, defaultPHP string) Resolved {
 	if target != "" {
 		return Resolved{
 			Name:   name,
@@ -116,7 +117,23 @@ func build(name, path, target, php string, secure bool, defaultPHP string) Resol
 			Secure: secure,
 		}
 	}
-	kind, docroot := detect(path)
+	var kind Kind
+	var docroot string
+	if root != "" {
+		docroot = root
+		if !filepath.IsAbs(docroot) {
+			docroot = filepath.Join(path, root)
+		}
+		// Determine kind from the override docroot's contents.
+		switch {
+		case exists(filepath.Join(docroot, "index.php")):
+			kind = KindPHP
+		default:
+			kind = KindStatic
+		}
+	} else {
+		kind, docroot = detect(path)
+	}
 	resolvedPHP := php
 	if resolvedPHP == "" && kind == KindPHP {
 		resolvedPHP = defaultPHP

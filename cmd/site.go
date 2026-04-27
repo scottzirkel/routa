@@ -47,10 +47,16 @@ var unparkCmd = &cobra.Command{
 	},
 }
 
+var linkRoot string
+
 var linkCmd = &cobra.Command{
 	Use:   "link [name]",
 	Short: "Link the current directory as <name>.test (defaults to dir basename)",
-	Args:  cobra.MaximumNArgs(1),
+	Long: `Link the current directory as <name>.test. By default hostr auto-detects
+the docroot (Laravel public/, Astro dist/, etc). Use --root to override
+when the heuristic picks the wrong dir — e.g. for a vite build you might
+say --root dist, or for a custom layout --root web/public.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -64,9 +70,17 @@ var linkCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		site.AddLink(s, site.Link{Name: name, Path: cwd, Secure: true})
-		return commitAndReload(s, fmt.Sprintf("linked %s → %s.test", cwd, name))
+		site.AddLink(s, site.Link{Name: name, Path: cwd, Root: linkRoot, Secure: true})
+		msg := fmt.Sprintf("linked %s → %s.test", cwd, name)
+		if linkRoot != "" {
+			msg += fmt.Sprintf("  (root=%s)", linkRoot)
+		}
+		return commitAndReload(s, msg)
 	},
+}
+
+func init() {
+	linkCmd.Flags().StringVar(&linkRoot, "root", "", "override docroot (relative to current dir, or absolute)")
 }
 
 var unlinkCmd = &cobra.Command{

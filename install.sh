@@ -5,8 +5,13 @@ set -e
 
 cd "$(dirname "$0")"
 
-echo "→ building hostr"
-go build -o hostr .
+VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+PKG="github.com/scottzirkel/hostr/cmd"
+
+echo "→ building hostr ($VERSION, $COMMIT)"
+go build -ldflags "-X $PKG.Version=$VERSION -X $PKG.Commit=$COMMIT -X $PKG.BuildDate=$BUILD_DATE" -o hostr .
 
 mkdir -p "$HOME/.local/bin"
 target="$(realpath ./hostr)"
@@ -25,4 +30,4 @@ case ":$PATH:" in
 esac
 
 echo
-echo "Test: hostr status"
+echo "Test: hostr version && hostr status"

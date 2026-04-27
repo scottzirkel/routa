@@ -41,6 +41,34 @@ hostr restart [unit]            # restart all hostr services or one named unit
 hostr php list / use / rm
 hostr park / unpark / link / unlink / isolate / secure
 hostr proxy <name> <port>       # reverse-proxy <name>.test → 127.0.0.1:<port>
+hostr version                   # print version, commit, build date
+```
+
+## Custom docroot
+
+Auto-detection picks Laravel's `public/`, then `dist/`/`out/`/`build/`/`_site/`,
+then the dir itself. Override when the heuristic gets it wrong:
+
+```bash
+cd ~/code/some-vite-app
+hostr link --root dist          # serves dist/ instead of the autodetect's choice
+```
+
+## Shell completion
+
+Cobra ships completion for bash/zsh/fish/powershell. Generate and source:
+
+```bash
+# zsh — drop into your fpath
+mkdir -p ~/.zsh/completion
+hostr completion zsh > ~/.zsh/completion/_hostr
+# add to ~/.zshrc once: fpath+=~/.zsh/completion && autoload -U compinit && compinit
+
+# bash
+hostr completion bash > ~/.local/share/bash-completion/completions/hostr
+
+# fish
+hostr completion fish > ~/.config/fish/completions/hostr.fish
 ```
 
 ## Proxying dev servers
