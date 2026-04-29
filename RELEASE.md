@@ -67,3 +67,5 @@ The initial release line was reconstructed from the first commits:
 - `v0.3.0`: version command, custom docroot override, and completion docs.
 - `v0.3.1`: roadmap documentation.
 - `v0.4.0`: PHP ini management, CLI PHP/Composer proxies, safer Caddy rendering, and PHP removal fixes.
+- `v0.4.1`: release process documentation.
+- `v0.5.0`: 1.0 roadmap organization, `doctor --json`, state file versioning, Caddy log rotation, Valet migration/root coverage, release workflow, and expanded routing/cutover tests.
