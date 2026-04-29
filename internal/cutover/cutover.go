@@ -127,21 +127,33 @@ func hasSites() Check {
 const sudoBlock = `# === hostr cutover — run as root, single block ===
 set -e
 
-# 1) Allow user processes (hostr-caddy under systemd --user) to bind low ports.
+# 1) Refuse to continue if there are no systemd-networkd .network files to patch.
+found_network=0
+for nf in /etc/systemd/network/*.network; do
+    [ -f "$nf" ] || continue
+    found_network=1
+    break
+done
+if [ "$found_network" -eq 0 ]; then
+    echo "hostr cutover needs at least one /etc/systemd/network/*.network file for per-link ~test routing." >&2
+    exit 1
+fi
+
+# 2) Allow user processes (hostr-caddy under systemd --user) to bind low ports.
 echo 'net.ipv4.ip_unprivileged_port_start=80' > /etc/sysctl.d/50-hostr.conf
 sysctl --system >/dev/null
 
-# 2) Stop and disable legacy local-dev services + dnsmasq.
+# 3) Stop and disable legacy local-dev services + dnsmasq.
 systemctl disable --now valet-dns.service nginx.service dnsmasq.service 2>/dev/null || true
 
-# 3) Restore /etc/resolv.conf to systemd-resolved's stub.
+# 4) Restore /etc/resolv.conf to systemd-resolved's stub.
 rm -f /etc/resolv.conf
 ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 
-# 4) Make sure systemd-resolved is up.
+# 5) Make sure systemd-resolved is up.
 systemctl enable --now systemd-resolved.service
 
-# 5) Per-link routing: each managed interface gets *.test → 127.0.0.1:1053.
+# 6) Per-link routing: each managed interface gets *.test → 127.0.0.1:1053.
 for nf in /etc/systemd/network/*.network; do
     [ -f "$nf" ] || continue
     base=$(basename "$nf" .network)
@@ -153,7 +165,7 @@ Domains=~test
 CONF
 done
 
-# 6) Reload networkd + restart resolved to apply.
+# 7) Reload networkd + restart resolved to apply.
 networkctl reload
 systemctl restart systemd-resolved.service
 `

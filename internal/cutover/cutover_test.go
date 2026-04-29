@@ -77,6 +77,8 @@ func TestDetectPhase(t *testing.T) {
 func TestSudoBlockConfiguresPerLinkRouting(t *testing.T) {
 	block := SudoBlock()
 	for _, want := range []string{
+		"found_network=0",
+		"hostr cutover needs at least one /etc/systemd/network/*.network file",
 		"/etc/systemd/network/*.network",
 		"DNS=127.0.0.1:1053",
 		"Domains=~test",
