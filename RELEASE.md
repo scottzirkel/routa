@@ -47,7 +47,10 @@ Before `v1.0.0`, minor releases may still include breaking changes, but prefer c
    git push origin main --tags
    ```
 
-7. Verify:
+7. Verify the `Release` GitHub Actions workflow passes. Pushing a `v*` tag
+   publishes Linux `amd64` and `arm64` tarballs plus `checksums.txt`.
+
+8. Verify locally:
 
    ```bash
    git status -sb

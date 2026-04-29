@@ -29,9 +29,7 @@ trying to become a full Herd replacement.
   - Review error messages for service failures, DNS failures, cert trust
     failures, and port conflicts.
 - **Distribution**
-  - GitHub Releases with prebuilt binaries via a `release.yml` workflow.
-  - Release workflow should run `go test`, `go vet`, and build artifacts from
-    tags.
+  - Exercise the GitHub release workflow on the next `v0.x.y` tag.
   - Tagged releases with proper semver; `hostr version` already prints
     `git describe`.
 - **Docs pass**
