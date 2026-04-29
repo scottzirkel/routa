@@ -12,6 +12,17 @@ Builds and symlinks `./hostr` into `~/.local/bin/`. Run it as yourself — no `s
 
 If `~/.local/bin` isn't on your `$PATH`, the script tells you and prints the line to add to your shell rc.
 
+## Support contract
+
+hostr targets Linux desktops with systemd user services and systemd-resolved.
+It serves local sites under `.test`, binds Caddy to localhost, and manages PHP
+through static builds under `~/.local/share/hostr/php/`.
+
+Intentionally out of scope: a GUI app, automatic in-place binary updates, macOS
+support, non-systemd init systems, and arbitrary local TLDs. Use the release
+artifacts or your OS package manager when available; otherwise rebuild with
+`git pull && bash install.sh`.
+
 ## Quick start
 
 ```bash
@@ -50,6 +61,26 @@ hostr park / unpark / link / unlink / isolate / secure
 hostr proxy <name> <port>       # reverse-proxy <name>.test → 127.0.0.1:<port>
 hostr version                   # print version, commit, build date
 ```
+
+## Health checks
+
+`hostr doctor` checks user services, Caddy ports, hostr DNS, and the detected
+cutover phase. Add `--probe` to send a HEAD request to every configured site.
+
+For scripts and bug reports, `hostr doctor --json` emits a stable top-level
+shape:
+
+```json
+{
+  "services": [],
+  "network": {},
+  "dns": {},
+  "cutover": {},
+  "site_probes": []
+}
+```
+
+`site_probes` is omitted unless `--probe` is used.
 
 ## PHP CLI proxies
 
@@ -182,6 +213,23 @@ Subdomains (`api.affiliate`, `app.affiliate`, …) group under their parent (`af
 `browser → systemd-resolved (127.0.0.53) → per-link routing for ~test → 127.0.0.1:1053 (hostr-dns) → 127.0.0.1 → hostr-caddy → site fragment`
 
 The per-link config goes in `/etc/systemd/network/<file>.d/hostr.conf` (one per existing `.network` file). Global routing via `/etc/systemd/resolved.conf.d/` doesn't pin queries to a specific server, so per-link is the only way to reliably route a single domain.
+
+## Troubleshooting
+
+- **A site does not resolve:** run `hostr doctor`. In Phase 1, query hostr DNS
+  directly with `hostr query app.test`; system-wide `.test` routing only happens
+  after `hostr cutover`.
+- **Caddy is not on the expected port:** run `hostr restart caddy` and then
+  `hostr doctor`. If the cutover phase is partial, re-run `hostr cutover` or
+  `hostr cutover --rollback` to converge.
+- **A PHP site returns 503:** install or select a PHP version with
+  `hostr php install <ver>` and `hostr php use <ver>`, or isolate the site with
+  `hostr isolate <site> <ver>`.
+- **Certificates are not trusted:** re-run `hostr install` to reinstall the
+  local CA, then restart browsers that cache trust state.
+- **Imported Valet sites look wrong:** run `hostr migrate-from-valet --dry-run`
+  and check the planned links, roots, HTTPS status, and PHP versions before
+  applying.
 
 ## Uninstall
 

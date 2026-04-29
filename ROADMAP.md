@@ -35,12 +35,9 @@ trying to become a full Herd replacement.
   - Tagged releases with proper semver; `hostr version` already prints
     `git describe`.
 - **Docs pass**
-  - README should clearly cover install, migrate from Valet, rollback,
-    uninstall, common failures, and where files live.
-  - Document the `hostr doctor --json` output contract for scripts, bug reports,
-    and regression checks.
-  - Add a short 1.0 support contract: Linux-only, `.test`, systemd-resolved
-    expectations, no GUI, no auto-update.
+  - Keep README troubleshooting current as install, migration, rollback, and
+    release packaging behavior changes.
+  - Expand command help where workflows still require README context.
 
 ## Near-term after 1.0 (small, well-scoped)
 
