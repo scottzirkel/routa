@@ -9,17 +9,23 @@ enough to treat the CLI and config shape as a real contract. This milestone is n
 trying to become a full-stack desktop dev suite.
 
 - **Installation and rollback confidence**
-  - Harden `hostr install`, `hostr cutover`, `hostr cutover --rollback`, and
-    `hostr uninstall --purge`.
-  - Continue adding tests around cutover and rollback behavior.
+  - Harden `hostr install` and `hostr uninstall --purge`.
+  - Continue adding tests around cutover, rollback, and partial-state recovery.
+  - `v0.5.1` added baseline hardening for proxy target validation,
+    PHP-FPM cleanup during uninstall, safer rollback resolver restoration,
+    existing systemd-resolved detection, and cutover refusal when no
+    systemd-networkd `.network` files are available.
   - Document the required host assumptions: systemd user services,
-    systemd-resolved, Caddy, and p11-kit trust store behavior.
+    systemd-resolved, systemd-networkd `.network` files for per-link routing,
+    Caddy, and p11-kit trust store behavior.
 - **Config/schema stability**
   - Treat `~/.config/hostr/state.json` as a stable contract.
   - Add explicit migrations when a future state version changes shape.
 - **Core routing correctness**
   - Continue expanding edge-case tests for site detection, custom roots, linked
     sites, parked dirs, proxies, secure toggle, and missing docroots.
+  - Proxy targets now validate before state is saved or Caddy fragments render;
+    continue testing more routing combinations.
 - **Migration reliability**
   - Continue covering parked dirs, linked dirs, Nginx custom roots, isolated PHP versions,
     and missing/weird legacy config.

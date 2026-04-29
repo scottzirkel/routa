@@ -69,3 +69,4 @@ The initial release line was reconstructed from the first commits:
 - `v0.4.0`: PHP ini management, CLI PHP/Composer proxies, safer Caddy rendering, and PHP removal fixes.
 - `v0.4.1`: release process documentation.
 - `v0.5.0`: 1.0 roadmap organization, `doctor --json`, state file versioning, Caddy log rotation, migration/root coverage, release workflow, and expanded routing/cutover tests.
+- `v0.5.1`: proxy target validation, PHP-FPM uninstall cleanup, safer rollback resolver restoration, corrected Phase 1 detection with existing systemd-resolved, and cutover guard for missing systemd-networkd `.network` files.
