@@ -6,6 +6,7 @@ package site
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -67,6 +68,24 @@ func ValidateName(name string) error {
 	}
 	if len(name) > 253 || !siteNameRE.MatchString(name) {
 		return fmt.Errorf("invalid site name %q", name)
+	}
+	return nil
+}
+
+func ValidateProxyTarget(target string) error {
+	if strings.TrimSpace(target) != target || target == "" {
+		return fmt.Errorf("invalid proxy target %q", target)
+	}
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return fmt.Errorf("invalid proxy target %q: expected host:port", target)
+	}
+	if host == "" {
+		return fmt.Errorf("invalid proxy target %q: host cannot be empty", target)
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("invalid proxy target %q: port must be 1-65535", target)
 	}
 	return nil
 }
@@ -354,6 +373,11 @@ func WriteFragments(sites []Resolved) error {
 	for _, s := range sites {
 		if err := ValidateName(s.Name); err != nil {
 			return err
+		}
+		if s.Kind == KindProxy {
+			if err := ValidateProxyTarget(s.Target); err != nil {
+				return err
+			}
 		}
 	}
 	if err := os.MkdirAll(paths.SitesDir(), 0o755); err != nil {

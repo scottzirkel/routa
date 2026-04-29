@@ -146,7 +146,10 @@ Caddy auto-handles WebSocket upgrades, so HMR works.`,
 		if err != nil {
 			return err
 		}
-		target := normalizeProxyTarget(args[1])
+		target, err := normalizeProxyTarget(args[1])
+		if err != nil {
+			return err
+		}
 		s, err := site.Load()
 		if err != nil {
 			return err
@@ -156,14 +159,17 @@ Caddy auto-handles WebSocket upgrades, so HMR works.`,
 	},
 }
 
-func normalizeProxyTarget(t string) string {
+func normalizeProxyTarget(t string) (string, error) {
+	t = strings.TrimSpace(t)
 	if !strings.Contains(t, ":") {
-		return "127.0.0.1:" + t
+		t = "127.0.0.1:" + t
+	} else if strings.HasPrefix(t, ":") {
+		t = "127.0.0.1" + t
 	}
-	if strings.HasPrefix(t, ":") {
-		return "127.0.0.1" + t
+	if err := site.ValidateProxyTarget(t); err != nil {
+		return "", err
 	}
-	return t
+	return t, nil
 }
 
 var secureCmd = &cobra.Command{

@@ -72,3 +72,39 @@ func TestDoctorProbeJSONShape(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeProxyTarget(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr string
+	}{
+		{name: "bare port", input: "5173", want: "127.0.0.1:5173"},
+		{name: "leading colon", input: ":5173", want: "127.0.0.1:5173"},
+		{name: "host and port", input: "localhost:5173", want: "localhost:5173"},
+		{name: "invalid port", input: "nope", wantErr: "port must be 1-65535"},
+		{name: "invalid zero port", input: ":0", wantErr: "port must be 1-65535"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeProxyTarget(tt.input)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("target = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

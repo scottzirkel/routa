@@ -281,6 +281,23 @@ func TestWriteFragmentsRendersProxySite(t *testing.T) {
 	}
 }
 
+func TestWriteFragmentsRejectsInvalidProxyTarget(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	err := WriteFragments([]Resolved{{
+		Name:   "vite",
+		Target: "127.0.0.1:nope",
+		Kind:   KindProxy,
+		Secure: true,
+	}})
+	if err == nil {
+		t.Fatal("expected invalid proxy target error")
+	}
+	if !strings.Contains(err.Error(), "port must be 1-65535") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestWriteFragmentsRemovesStaleFragments(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
