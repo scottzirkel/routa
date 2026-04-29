@@ -153,6 +153,69 @@ func TestResolveSkipsInvalidAndHiddenParkedDirs(t *testing.T) {
 	}
 }
 
+func TestDetectSiteHeuristics(t *testing.T) {
+	tests := []struct {
+		name        string
+		files       []string
+		wantKind    Kind
+		wantDocroot string
+	}{
+		{
+			name:        "laravel public index wins",
+			files:       []string{"composer.json", "public/index.php", "index.php"},
+			wantKind:    KindPHP,
+			wantDocroot: "public",
+		},
+		{
+			name:        "plain php at root",
+			files:       []string{"index.php"},
+			wantKind:    KindPHP,
+			wantDocroot: ".",
+		},
+		{
+			name:        "dist static build",
+			files:       []string{"dist/index.html"},
+			wantKind:    KindStatic,
+			wantDocroot: "dist",
+		},
+		{
+			name:        "root static",
+			files:       []string{"index.html"},
+			wantKind:    KindStatic,
+			wantDocroot: ".",
+		},
+		{
+			name:        "missing docroot falls back to site path",
+			wantKind:    KindStatic,
+			wantDocroot: ".",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, file := range tt.files {
+				path := filepath.Join(dir, file)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("ok"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			gotKind, gotDocroot := detect(dir)
+			wantDocroot := dir
+			if tt.wantDocroot != "." {
+				wantDocroot = filepath.Join(dir, tt.wantDocroot)
+			}
+			if gotKind != tt.wantKind || gotDocroot != wantDocroot {
+				t.Fatalf("detect() = (%s, %q), want (%s, %q)", gotKind, gotDocroot, tt.wantKind, wantDocroot)
+			}
+		})
+	}
+}
+
 func TestWriteFragmentsQuotesPathsAndUsesHTTPForInsecureSites(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
