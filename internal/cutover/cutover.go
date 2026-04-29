@@ -30,7 +30,10 @@ func Detect() Phase {
 	perLink := perLinkDropinExists()
 	caddyOnStd := portBound("127.0.0.1:443") || portBound(":443")
 	caddyOnAlt := portBound("127.0.0.1:8443")
+	return detectPhase(resolvOK, perLink, caddyOnStd, caddyOnAlt)
+}
 
+func detectPhase(resolvOK, perLink, caddyOnStd, caddyOnAlt bool) Phase {
 	if !resolvOK && !perLink && caddyOnAlt {
 		return PhaseOne
 	}

@@ -11,7 +11,7 @@ trying to become a full Herd replacement.
 - **Installation and rollback confidence**
   - Harden `hostr install`, `hostr cutover`, `hostr cutover --rollback`, and
     `hostr uninstall --purge`.
-  - Add tests around cutover state detection and rendered system changes.
+  - Continue adding tests around cutover and rollback behavior.
   - Document the required host assumptions: systemd user services,
     systemd-resolved, Caddy, and p11-kit trust store behavior.
 - **Config/schema stability**
