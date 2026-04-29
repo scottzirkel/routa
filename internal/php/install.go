@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/scottzirkel/hostr/internal/paths"
@@ -17,6 +19,10 @@ import (
 func versionDir(version string) string { return filepath.Join(paths.PHPDir(), version) }
 
 type Installed struct{ Version string }
+
+func BinPath(spec string) string {
+	return filepath.Join(paths.PHPDir(), spec, "bin", "php")
+}
 
 func InstalledVersions() ([]Installed, error) {
 	entries, err := os.ReadDir(paths.PHPDir())
@@ -58,20 +64,97 @@ func Symlinks() (map[string]string, error) {
 	}
 	out := map[string]string{}
 	for _, e := range entries {
-		info, err := e.Info()
-		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		if e.Type()&os.ModeSymlink == 0 {
 			continue
 		}
 		t, err := os.Readlink(filepath.Join(paths.PHPDir(), e.Name()))
 		if err != nil {
 			continue
 		}
-		out[e.Name()] = t
+		target := filepath.Base(t)
+		if _, err := ParseVersion(target); err != nil {
+			continue
+		}
+		if info, err := os.Stat(versionDir(target)); err != nil || !info.IsDir() {
+			continue
+		}
+		out[e.Name()] = target
 	}
 	return out, nil
 }
 
-func RemoveVersion(version string) error { return os.RemoveAll(versionDir(version)) }
+func AliasTarget(alias string) (string, bool, error) {
+	links, err := Symlinks()
+	if err != nil {
+		return "", false, err
+	}
+	target, ok := links[alias]
+	return target, ok, nil
+}
+
+func RemoveVersion(version string) error {
+	links, err := Symlinks()
+	if err != nil {
+		return err
+	}
+
+	target := version
+	if aliasTarget, ok := links[version]; ok {
+		target = aliasTarget
+	} else if _, err := ParseVersion(version); err != nil {
+		resolved, err := resolveInstalledSpec(version)
+		if err != nil {
+			return err
+		}
+		target = resolved
+	}
+	if _, err := ParseVersion(target); err != nil {
+		return fmt.Errorf("invalid PHP version %q", version)
+	}
+	if info, err := os.Stat(versionDir(target)); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("PHP %s is not installed", version)
+		}
+		return err
+	} else if !info.IsDir() {
+		return fmt.Errorf("PHP %s is not an installed version directory", version)
+	}
+
+	for alias, aliasTarget := range links {
+		if alias == version || aliasTarget == target {
+			if err := os.Remove(filepath.Join(paths.PHPDir(), alias)); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	return os.RemoveAll(versionDir(target))
+}
+
+func resolveInstalledSpec(spec string) (string, error) {
+	installed, err := InstalledVersions()
+	if err != nil {
+		return "", err
+	}
+	var matches []string
+	for _, i := range installed {
+		v, err := ParseVersion(i.Version)
+		if err != nil {
+			continue
+		}
+		if v.Matches(spec) {
+			matches = append(matches, i.Version)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("PHP %s is not installed", spec)
+	case 1:
+		return matches[0], nil
+	default:
+		sort.Strings(matches)
+		return "", fmt.Errorf("PHP %s matches multiple installed versions: %s", spec, strings.Join(matches, ", "))
+	}
+}
 
 // Install downloads cli + fpm, writes them to bin/php and bin/php-fpm,
 // and refreshes the major.minor symlink.

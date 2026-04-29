@@ -57,6 +57,9 @@ var restartCmd = &cobra.Command{
 			units = append(units, runningPHPUnits()...)
 		}
 		for _, u := range units {
+			if err := prepareRestartUnit(u); err != nil {
+				return fmt.Errorf("prepare %s: %w", u, err)
+			}
 			if err := systemd.RunSystemctl("--user", "restart", u); err != nil {
 				return fmt.Errorf("restart %s: %w", u, err)
 			}
@@ -71,6 +74,22 @@ func normalizeUnit(s string) string {
 		return s
 	}
 	return s + ".service"
+}
+
+func prepareRestartUnit(unit string) error {
+	spec, ok := phpSpecFromUnit(unit)
+	if !ok {
+		return nil
+	}
+	return php.WriteFPMConfig(spec)
+}
+
+func phpSpecFromUnit(unit string) (string, bool) {
+	if !strings.HasPrefix(unit, "hostr-php@") || !strings.HasSuffix(unit, ".service") {
+		return "", false
+	}
+	spec := strings.TrimSuffix(strings.TrimPrefix(unit, "hostr-php@"), ".service")
+	return spec, spec != ""
 }
 
 // --- status ---------------------------------------------------------------
@@ -151,13 +170,13 @@ var openCmd = &cobra.Command{
 
 func siteNameFromArgsOrCwd(args []string) (string, error) {
 	if len(args) == 1 {
-		return strings.TrimSuffix(args[0], ".test"), nil
+		return normalizeSiteName(args[0])
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Base(cwd), nil
+	return normalizeSiteName(filepath.Base(cwd))
 }
 
 func siteURL(name string) string {
@@ -186,7 +205,10 @@ var logsCmd = &cobra.Command{
 			c.Stdin = os.Stdin
 			return c.Run()
 		}
-		name := strings.TrimSuffix(args[0], ".test")
+		name, err := normalizeSiteName(args[0])
+		if err != nil {
+			return err
+		}
 		s, err := site.Load()
 		if err != nil {
 			return err

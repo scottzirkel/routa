@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -49,7 +51,22 @@ type Resolved struct {
 	Secure  bool
 }
 
+var siteNameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
 func statePath() string { return filepath.Join(paths.ConfigDir(), "state.json") }
+
+func ValidateName(name string) error {
+	if name == "" {
+		return fmt.Errorf("site name cannot be empty")
+	}
+	if strings.HasSuffix(name, ".test") {
+		return fmt.Errorf("site name should not include .test")
+	}
+	if len(name) > 253 || !siteNameRE.MatchString(name) {
+		return fmt.Errorf("invalid site name %q", name)
+	}
+	return nil
+}
 
 func Load() (*State, error) {
 	b, err := os.ReadFile(statePath())
@@ -90,8 +107,12 @@ func (s *State) Resolve() []Resolved {
 			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 				continue
 			}
+			name := strings.ToLower(e.Name())
+			if ValidateName(name) != nil {
+				continue
+			}
 			p := filepath.Join(dir, e.Name())
-			r := build(e.Name(), p, "", "", "", true, s.DefaultPHP)
+			r := build(name, p, "", "", "", true, s.DefaultPHP)
 			seen[r.Name] = r
 		}
 	}
@@ -106,6 +127,44 @@ func (s *State) Resolve() []Resolved {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+func (s *State) ResolvePath(path string) []Resolved {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = filepath.Clean(path)
+	}
+	var matches []Resolved
+	longest := -1
+	for _, r := range s.Resolve() {
+		if r.Path == "" {
+			continue
+		}
+		sitePath, err := filepath.Abs(r.Path)
+		if err != nil {
+			sitePath = filepath.Clean(r.Path)
+		}
+		if !pathContains(sitePath, abs) {
+			continue
+		}
+		if len(sitePath) > longest {
+			longest = len(sitePath)
+			matches = matches[:0]
+		}
+		if len(sitePath) == longest {
+			matches = append(matches, r)
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].Name < matches[j].Name })
+	return matches
+}
+
+func pathContains(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))
 }
 
 func build(name, path, root, target, php string, secure bool, defaultPHP string) Resolved {
@@ -231,7 +290,7 @@ func RemoveLink(s *State, name string) bool {
 
 // --- caddy fragment rendering -------------------------------------------
 
-const fragmentTmpl = `{{.Name}}.test {
+const fragmentTmpl = `{{.SiteAddress}} {
 	bind 127.0.0.1
 {{- if .Secure}}
 	tls internal
@@ -239,13 +298,13 @@ const fragmentTmpl = `{{.Name}}.test {
 	# secure=false: HTTP only
 {{- end}}
 {{- if eq (printf "%s" .Kind) "proxy"}}
-	reverse_proxy {{.Target}}
+	reverse_proxy {{.TargetCaddy}}
 {{- else}}
-	root * {{.Docroot}}
+	root * {{.DocrootCaddy}}
 	encode zstd gzip
 {{- if eq (printf "%s" .Kind) "php"}}
 {{- if .PHP}}
-	php_fastcgi unix/{{.SockPath}}
+	php_fastcgi {{.SockPathCaddy}}
 {{- else}}
 	respond "hostr: {{.Name}} is a PHP site but no PHP version is installed. Run 'hostr php install <ver>'." 503
 {{- end}}
@@ -253,18 +312,26 @@ const fragmentTmpl = `{{.Name}}.test {
 	file_server
 {{- end}}
 	log {
-		output file {{.LogDir}}/{{.Name}}.log
+		output file {{.LogFileCaddy}}
 	}
 }
 `
 
 type fragData struct {
 	Resolved
-	SockPath string
-	LogDir   string
+	SiteAddress   string
+	TargetCaddy   string
+	DocrootCaddy  string
+	SockPathCaddy string
+	LogFileCaddy  string
 }
 
 func WriteFragments(sites []Resolved) error {
+	for _, s := range sites {
+		if err := ValidateName(s.Name); err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll(paths.SitesDir(), 0o755); err != nil {
 		return err
 	}
@@ -283,9 +350,12 @@ func WriteFragments(sites []Resolved) error {
 	t := template.Must(template.New("frag").Parse(fragmentTmpl))
 	for _, s := range sites {
 		data := fragData{
-			Resolved: s,
-			SockPath: filepath.Join(paths.RunDir(), fmt.Sprintf("php-fpm-%s.sock", s.PHP)),
-			LogDir:   paths.LogDir(),
+			Resolved:      s,
+			SiteAddress:   siteAddress(s),
+			TargetCaddy:   caddyQuote(s.Target),
+			DocrootCaddy:  caddyQuote(s.Docroot),
+			SockPathCaddy: caddyQuote("unix/" + filepath.Join(paths.RunDir(), fmt.Sprintf("php-fpm-%s.sock", s.PHP))),
+			LogFileCaddy:  caddyQuote(filepath.Join(paths.LogDir(), s.Name+".log")),
 		}
 		f, err := os.Create(filepath.Join(paths.SitesDir(), fragName(s.Name)))
 		if err != nil {
@@ -301,6 +371,17 @@ func WriteFragments(sites []Resolved) error {
 }
 
 func fragName(siteName string) string { return siteName + ".caddy" }
+
+func siteAddress(s Resolved) string {
+	if s.Secure {
+		return s.Name + ".test"
+	}
+	return "http://" + s.Name + ".test"
+}
+
+func caddyQuote(s string) string {
+	return strconv.Quote(s)
+}
 
 // Reload regenerates fragments and asks Caddy to pick them up.
 // systemctl --user reload calls `caddy reload --config <path>`.

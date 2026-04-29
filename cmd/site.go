@@ -66,6 +66,10 @@ say --root dist, or for a custom layout --root web/public.`,
 		if len(args) == 1 {
 			name = args[0]
 		}
+		name, err = normalizeSiteName(name)
+		if err != nil {
+			return err
+		}
 		s, err := site.Load()
 		if err != nil {
 			return err
@@ -88,14 +92,18 @@ var unlinkCmd = &cobra.Command{
 	Short: "Remove a linked site",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
+		name, err := normalizeSiteName(args[0])
+		if err != nil {
+			return err
+		}
 		s, err := site.Load()
 		if err != nil {
 			return err
 		}
-		if !site.RemoveLink(s, args[0]) {
-			return fmt.Errorf("no link named %s", args[0])
+		if !site.RemoveLink(s, name) {
+			return fmt.Errorf("no link named %s", name)
 		}
-		return commitAndReload(s, fmt.Sprintf("unlinked %s", args[0]))
+		return commitAndReload(s, fmt.Sprintf("unlinked %s", name))
 	},
 }
 
@@ -104,7 +112,11 @@ var isolateCmd = &cobra.Command{
 	Short: "Pin a site to a specific PHP version",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(_ *cobra.Command, args []string) error {
-		name, ver := args[0], args[1]
+		name, err := normalizeSiteName(args[0])
+		if err != nil {
+			return err
+		}
+		ver := args[1]
 		if err := requirePHP(ver); err != nil {
 			return err
 		}
@@ -130,7 +142,10 @@ Useful for Vite, Next, Astro, Rails, or anything you'd otherwise hit at localhos
 Caddy auto-handles WebSocket upgrades, so HMR works.`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(_ *cobra.Command, args []string) error {
-		name := strings.TrimSuffix(args[0], ".test")
+		name, err := normalizeSiteName(args[0])
+		if err != nil {
+			return err
+		}
 		target := normalizeProxyTarget(args[1])
 		s, err := site.Load()
 		if err != nil {
@@ -156,21 +171,25 @@ var secureCmd = &cobra.Command{
 	Short: "Toggle HTTPS for a linked site (default: on)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
+		name, err := normalizeSiteName(args[0])
+		if err != nil {
+			return err
+		}
 		s, err := site.Load()
 		if err != nil {
 			return err
 		}
 		for i, l := range s.Links {
-			if l.Name == args[0] {
+			if l.Name == name {
 				s.Links[i].Secure = !l.Secure
 				state := "on"
 				if !s.Links[i].Secure {
 					state = "off"
 				}
-				return commitAndReload(s, fmt.Sprintf("secure %s: %s", args[0], state))
+				return commitAndReload(s, fmt.Sprintf("secure %s: %s", name, state))
 			}
 		}
-		return fmt.Errorf("no link named %s", args[0])
+		return fmt.Errorf("no link named %s", name)
 	},
 }
 
@@ -183,6 +202,14 @@ func resolveDir(args []string) (string, error) {
 		return filepath.Abs(args[0])
 	}
 	return os.Getwd()
+}
+
+func normalizeSiteName(name string) (string, error) {
+	name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".test")
+	if err := site.ValidateName(name); err != nil {
+		return "", err
+	}
+	return name, nil
 }
 
 func commitAndReload(s *site.State, msg string) error {

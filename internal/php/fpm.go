@@ -27,6 +27,8 @@ pm.max_requests = 500
 clear_env = no
 catch_workers_output = yes
 decorate_workers_output = no
+{{range .INISettings}}php_admin_value[{{.Key}}] = {{.Value}}
+{{end}}
 `
 
 // systemd template — %i is the version spec.
@@ -48,9 +50,10 @@ WantedBy=default.target
 `
 
 type fpmTmplData struct {
-	RunDir string
-	LogDir string
-	Spec   string
+	RunDir      string
+	LogDir      string
+	Spec        string
+	INISettings []INISetting
 }
 
 type unitTmplData struct {
@@ -65,6 +68,10 @@ func WriteFPMConfig(spec string) error {
 	if err := os.MkdirAll(paths.LogDir(), 0o755); err != nil {
 		return err
 	}
+	settings, err := EffectiveINISettings(spec)
+	if err != nil {
+		return err
+	}
 	t := template.Must(template.New("fpm").Parse(fpmConfTmpl))
 	dest := filepath.Join(paths.RunDir(), fmt.Sprintf("php-fpm-%s.conf", spec))
 	f, err := os.Create(dest)
@@ -73,9 +80,10 @@ func WriteFPMConfig(spec string) error {
 	}
 	defer f.Close()
 	return t.Execute(f, fpmTmplData{
-		RunDir: paths.RunDir(),
-		LogDir: paths.LogDir(),
-		Spec:   spec,
+		RunDir:      paths.RunDir(),
+		LogDir:      paths.LogDir(),
+		Spec:        spec,
+		INISettings: settings,
 	})
 }
 

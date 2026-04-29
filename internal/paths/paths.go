@@ -19,8 +19,11 @@ func ConfigDir() string { return filepath.Join(xdg("XDG_CONFIG_HOME", ".config")
 func RunDir() string    { return filepath.Join(StateDir(), "run") }
 func LogDir() string    { return filepath.Join(StateDir(), "log") }
 func PHPDir() string    { return filepath.Join(DataDir(), "php") }
-func CADir() string     { return filepath.Join(DataDir(), "ca") }
-func SitesDir() string  { return filepath.Join(DataDir(), "sites") }
+func PHPConfigDir() string {
+	return filepath.Join(ConfigDir(), "php")
+}
+func CADir() string    { return filepath.Join(DataDir(), "ca") }
+func SitesDir() string { return filepath.Join(DataDir(), "sites") }
 
 func SystemdUserDir() string {
 	return filepath.Join(xdg("XDG_CONFIG_HOME", ".config"), "systemd", "user")
