@@ -66,7 +66,6 @@ trying to become a full Herd replacement.
 - **Plugin / driver system** — Laravel-style "drivers" for unusual project layouts so the auto-detect can be extended without touching core.
 - **Web dashboard** — small local web UI (in addition to TUI) for users who prefer a browser.
 - **macOS support** — most of the stack (Caddy, php-fpm, miekg/dns) is portable; the resolver bits are Linux-specific. Probably not worth doing while Herd exists.
-- **Tests** — almost none today; site detect, valet migration, version resolution, and cutover state detection are the highest-leverage units to cover.
 
 ## Won't do
 
