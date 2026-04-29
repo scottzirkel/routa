@@ -15,7 +15,11 @@ const rootTmpl = `{
 	https_port {{.HTTPSPort}}
 	admin      127.0.0.1:{{.AdminPort}}
 	log {
-		output file {{.LogDir}}/caddy.log
+		output file {{.LogFile}} {
+			roll_size 10MiB
+			roll_keep 5
+			roll_keep_for 720h
+		}
 		level INFO
 	}
 }
@@ -63,15 +67,19 @@ func Write(cfg RootConfig) error {
 	defer f.Close()
 	data := struct {
 		RootConfig
-		LogDir   string
+		LogFile  string
 		SitesDir string
 	}{
 		RootConfig: cfg,
-		LogDir:     paths.LogDir(),
+		LogFile:    quote(filepath.Join(paths.LogDir(), "caddy.log")),
 		SitesDir:   paths.SitesDir(),
 	}
 	if err := t.Execute(f, data); err != nil {
 		return fmt.Errorf("render Caddyfile: %w", err)
 	}
 	return nil
+}
+
+func quote(s string) string {
+	return fmt.Sprintf("%q", s)
 }

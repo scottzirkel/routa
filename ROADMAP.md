@@ -28,8 +28,6 @@ trying to become a full Herd replacement.
 - **Supportability**
   - Review error messages for service failures, DNS failures, cert trust
     failures, and port conflicts.
-  - **Caddy log rotation** — `output file` doesn't rotate; either configure a
-    logrotate snippet on install or switch to size-bounded rolling logs.
 - **Distribution**
   - GitHub Releases with prebuilt binaries via a `release.yml` workflow.
   - Release workflow should run `go test`, `go vet`, and build artifacts from

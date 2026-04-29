@@ -110,6 +110,9 @@ func TestWriteFragmentsQuotesPathsAndUsesHTTPForInsecureSites(t *testing.T) {
 		"http://foo.test {",
 		"root * " + strconv.Quote(docroot),
 		"output file " + strconv.Quote(filepath.Join(os.Getenv("XDG_STATE_HOME"), "hostr", "log", "foo.log")),
+		"roll_size 10MiB",
+		"roll_keep 5",
+		"roll_keep_for 720h",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("rendered fragment missing %q:\n%s", want, content)

@@ -332,7 +332,11 @@ const fragmentTmpl = `{{.SiteAddress}} {
 	file_server
 {{- end}}
 	log {
-		output file {{.LogFileCaddy}}
+		output file {{.LogFileCaddy}} {
+			roll_size 10MiB
+			roll_keep 5
+			roll_keep_for 720h
+		}
 	}
 }
 `
