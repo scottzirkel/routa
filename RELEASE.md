@@ -82,3 +82,5 @@ The initial release line was reconstructed from the first commits:
   informational.
 - Clarified install dependency guidance for non-Arch Linux distributions.
 - Corrected `hostr doctor --probe` help text to say it sends HEAD requests.
+- Preserved `systemctl` failure details in `hostr doctor` service output instead
+  of showing a blank status when a unit check fails without stdout.

@@ -316,13 +316,7 @@ func collectDoctorReport(withProbes bool) (doctorReport, error) {
 	units := []string{"hostr-dns.service", "hostr-caddy.service"}
 	units = append(units, runningPHPUnits()...)
 	for _, u := range units {
-		out, _ := exec.Command("systemctl", "--user", "is-active", u).Output()
-		state := strings.TrimSpace(string(out))
-		report.Services = append(report.Services, doctorService{
-			Name:   u,
-			OK:     state == "active",
-			Status: state,
-		})
+		report.Services = append(report.Services, doctorServiceStatus(u, systemctlUserIsActive))
 	}
 
 	caddyAdminOK := httpOK("http://127.0.0.1:2019/config/")
@@ -379,6 +373,26 @@ func collectDoctorReport(withProbes bool) (doctorReport, error) {
 	}
 
 	return report, nil
+}
+
+func doctorServiceStatus(unit string, isActive func(string) ([]byte, error)) doctorService {
+	out, err := isActive(unit)
+	state := strings.TrimSpace(string(out))
+	if state == "" && err != nil {
+		state = err.Error()
+	}
+	if state == "" {
+		state = "unknown"
+	}
+	return doctorService{
+		Name:   unit,
+		OK:     state == "active",
+		Status: state,
+	}
+}
+
+func systemctlUserIsActive(unit string) ([]byte, error) {
+	return exec.Command("systemctl", "--user", "is-active", unit).CombinedOutput()
 }
 
 func renderDoctorText(cmd *cobra.Command, report doctorReport) error {

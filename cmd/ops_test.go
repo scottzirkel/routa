@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,6 +76,32 @@ func TestDoctorProbeJSONShape(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("JSON missing %s: %s", want, body)
 		}
+	}
+}
+
+func TestDoctorServiceStatusUsesSystemctlOutput(t *testing.T) {
+	service := doctorServiceStatus("hostr-caddy.service", func(string) ([]byte, error) {
+		return []byte("inactive\n"), errors.New("exit status 3")
+	})
+
+	if service.OK {
+		t.Fatal("inactive service should not be OK")
+	}
+	if service.Status != "inactive" {
+		t.Fatalf("status = %q, want inactive", service.Status)
+	}
+}
+
+func TestDoctorServiceStatusFallsBackToError(t *testing.T) {
+	service := doctorServiceStatus("hostr-caddy.service", func(string) ([]byte, error) {
+		return nil, errors.New("systemctl unavailable")
+	})
+
+	if service.OK {
+		t.Fatal("errored service should not be OK")
+	}
+	if service.Status != "systemctl unavailable" {
+		t.Fatalf("status = %q", service.Status)
 	}
 }
 

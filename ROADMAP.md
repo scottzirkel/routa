@@ -39,8 +39,9 @@ trying to become a full-stack desktop dev suite.
   - Missing/malformed config, relative symlinks, quoted Nginx roots, whitespace,
     custom roots, and isolated PHP versions now have focused coverage.
 - **Supportability**
-  - Review error messages for service failures, DNS failures, cert trust
-    failures, and port conflicts.
+  - Service failure diagnostics now preserve `systemctl` error details in
+    `hostr doctor`; continue reviewing DNS failures, cert trust failures, and
+    port conflicts.
 - **Distribution**
   - Current policy: GitHub releases are source/tag-only until a binary artifact
     policy is chosen.
