@@ -34,6 +34,57 @@ func TestPHPUnitsForUninstallDiscoversEnabledAndRuntimeInstances(t *testing.T) {
 	}
 }
 
+func TestPHPUnitsForUninstallIgnoresTemplatesAndMalformedRuntimeFiles(t *testing.T) {
+	systemdDir := t.TempDir()
+	runDir := t.TempDir()
+
+	for _, path := range []string{
+		filepath.Join(systemdDir, "hostr-php@.service"),
+		filepath.Join(systemdDir, "hostr-php@.service.bak"),
+		filepath.Join(runDir, "php-fpm-.conf"),
+		filepath.Join(runDir, "php-fpm-8.4.log"),
+		filepath.Join(runDir, "php-fpm-8.4.conf"),
+	} {
+		if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := phpUnitsForUninstall(systemdDir, runDir)
+	want := []string{"hostr-php@8.4.service"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("phpUnitsForUninstall() = %#v, want %#v", got, want)
+	}
+}
+
+func TestHostrUnitsForUninstallIncludesDiscoveredPHPUnits(t *testing.T) {
+	configHome := t.TempDir()
+	stateHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+
+	if err := os.MkdirAll(filepath.Join(configHome, "systemd", "user", "default.target.wants"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(stateHome, "hostr", "run"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		filepath.Join(configHome, "systemd", "user", "default.target.wants", "hostr-php@8.3.service"),
+		filepath.Join(stateHome, "hostr", "run", "php-fpm-8.4.sock"),
+	} {
+		if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := hostrUnitsForUninstall()
+	want := []string{"hostr-caddy.service", "hostr-dns.service", "hostr-php@8.3.service", "hostr-php@8.4.service"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("hostrUnitsForUninstall() = %#v, want %#v", got, want)
+	}
+}
+
 func TestHostrDirsForPurgeUsesXDGHostrDirs(t *testing.T) {
 	configHome := t.TempDir()
 	dataHome := t.TempDir()
