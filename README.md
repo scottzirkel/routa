@@ -1,18 +1,27 @@
 # hostr
 
-Local web dev server for Linux. PHP + static sites, per-site PHP versions, automatic HTTPS via a local CA.
+![hostr local web dev server for Linux](assets/media/hostr-header.webp)
 
-## Install
+hostr is a Linux local-development server for PHP, static, and proxied
+dev-server projects under `.test` domains with local HTTPS.
 
-```bash
-bash install.sh
-```
+It gives you a fast terminal workflow for local sites: park a directory, link a
+project, pin PHP versions per site, proxy frontend dev servers, and inspect the
+whole stack with one doctor command. hostr uses Caddy, systemd user services,
+systemd-resolved, and static PHP builds instead of running its own long-lived
+daemon.
 
-Builds and symlinks `./hostr` into `~/.local/bin/`. Run it as yourself — no `sudo`. Re-running picks up the latest build because the symlink doesn't move. After the first run, `hostr <command>` works from any directory.
+## What hostr manages
 
-If `~/.local/bin` isn't on your `$PATH`, the script tells you and prints the line to add to your shell rc.
+- `.test` DNS through a local DNS responder
+- HTTPS through Caddy's local CA
+- PHP-FPM per installed PHP version
+- Per-site PHP isolation for browser requests
+- PHP and Composer CLI proxies that use the right project PHP
+- Static sites and reverse proxies for frontend dev servers
+- systemd user services for Caddy, DNS, and PHP-FPM
 
-## Support contract
+## Platform Support
 
 hostr targets Linux desktops with systemd user services and systemd-resolved.
 It serves local sites under `.test`, binds Caddy to localhost, and manages PHP
@@ -23,6 +32,24 @@ support, non-systemd init systems, and arbitrary local TLDs. GitHub releases are
 currently source/tag releases only; build locally with `git pull && bash
 install.sh` until a binary artifact policy is chosen.
 
+## Install
+
+Install from a cloned checkout:
+
+```bash
+git clone https://github.com/scottzirkel/hostr.git
+cd hostr
+bash install.sh
+```
+
+The script builds hostr and symlinks `./hostr` into `~/.local/bin/`. Run it as
+yourself, not with `sudo`. Re-running picks up the latest local build because
+the symlink does not move. After the first run, `hostr <command>` works from any
+directory.
+
+If `~/.local/bin` is not on your `$PATH`, the script tells you and prints the
+line to add to your shell rc.
+
 ## Quick start
 
 ```bash
@@ -31,7 +58,6 @@ hostr install                   # provision services on alt ports (DNS :1053, :8
 hostr php install 8.4           # fetch a static PHP build
 hostr park ~/code               # any subdir of ~/code becomes <subdir>.test
 hostr link                      # link the current dir as <basename>.test
-hostr migrate-from-valet        # import an existing local PHP dev config
 
 # When ready:
 hostr cutover                   # swap onto :80/:443 + route *.test through hostr
@@ -239,9 +265,9 @@ link before running cutover.
   `hostr-caddy` is inactive, `hostr doctor` calls that out as a likely port
   ownership conflict.
 - **Rollback resolver behavior:** `hostr cutover --rollback` removes hostr's
-  per-link routing. The sudo rollback block restores `/etc/resolv.conf` to
-  Valet's resolver file when `/opt/valet-linux/resolv.conf` exists; otherwise it
-  restores systemd-resolved's stub resolver.
+  per-link routing. The sudo rollback block restores `/etc/resolv.conf` to a
+  detected legacy local-dev resolver when one exists; otherwise it restores
+  systemd-resolved's stub resolver.
 - **A PHP site returns 503:** install or select a PHP version with
   `hostr php install <ver>` and `hostr php use <ver>`, or isolate the site with
   `hostr isolate <site> <ver>`.
@@ -249,10 +275,6 @@ link before running cutover.
   local CA. If it fails, the error names the Caddy root path and the failed
   `trust anchor` action. Confirm p11-kit is installed and restart browsers that
   cache trust state.
-- **Imported sites look wrong:** run `hostr migrate-from-valet --dry-run`
-  and check the planned links, roots, HTTPS status, and PHP versions before
-  applying.
-
 ## Uninstall
 
 ```bash
