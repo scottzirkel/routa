@@ -295,7 +295,7 @@ type doctorProbeResult struct {
 
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
-	Short: "End-to-end health check: services, ports, DNS, cutover phase (--probe also GETs each site)",
+	Short: "End-to-end health check: services, ports, DNS, cutover phase (--probe also HEADs each site)",
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		report, err := collectDoctorReport(doctorProbe)
 		if err != nil {

@@ -33,7 +33,7 @@ func TestInstallDependencyErrorIncludesPackages(t *testing.T) {
 	}
 	for _, want := range []string{
 		"missing required command(s): caddy, trust, systemctl",
-		"sudo pacman -S caddy p11-kit systemd",
+		"Arch example: sudo pacman -S caddy p11-kit systemd",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q: %v", want, err)

@@ -92,7 +92,7 @@ func checkInstallDependencies() error {
 }
 
 func installDependencyError(missing []string) error {
-	return fmt.Errorf("missing required command(s): %s. Install dependencies with: sudo pacman -S caddy p11-kit systemd", strings.Join(missing, ", "))
+	return fmt.Errorf("missing required command(s): %s. Install dependencies with your system package manager (Arch example: sudo pacman -S caddy p11-kit systemd)", strings.Join(missing, ", "))
 }
 
 func missingInstallDependencies(lookPath func(string) (string, error)) []string {

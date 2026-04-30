@@ -28,9 +28,9 @@ func Run() []Check {
 		checkLegacyLocalDevStack(),
 		checkSystemdResolved(),
 		checkSystemdUser(),
-		checkBinary("caddy", "Required as the reverse proxy. Install: sudo pacman -S caddy"),
-		checkBinary("dnsmasq", "Optional fallback. Already present is fine."),
-		checkBinary("trust", "Used to install hostr's local CA into the system trust store. From package: p11-kit"),
+		checkRequiredBinary("caddy", "Required as the reverse proxy. Install Caddy with your system package manager."),
+		checkOptionalBinary("dnsmasq", "Optional fallback. Already present is fine."),
+		checkRequiredBinary("trust", "Required to install hostr's local CA into the system trust store. Usually provided by p11-kit."),
 	}
 }
 
@@ -105,6 +105,18 @@ func checkSystemdUser() Check {
 	c.Status = OK
 	c.Detail = strings.TrimSpace(string(out))
 	return c
+}
+
+func checkRequiredBinary(name, hint string) Check {
+	c := checkBinary(name, hint)
+	if c.Status == Absent {
+		c.Status = Fail
+	}
+	return c
+}
+
+func checkOptionalBinary(name, hint string) Check {
+	return checkBinary(name, hint)
 }
 
 func checkBinary(name, hint string) Check {
