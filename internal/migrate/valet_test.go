@@ -26,6 +26,33 @@ func TestReadConfig(t *testing.T) {
 	}
 }
 
+func TestReadConfigErrorsForMissingAndMalformedConfig(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		fakeHome(t)
+
+		_, err := ReadConfig()
+		if err == nil {
+			t.Fatal("expected missing config error")
+		}
+		if !strings.Contains(err.Error(), "read valet config") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("malformed", func(t *testing.T) {
+		fakeHome(t)
+		writeValetFile(t, "config.json", `{"paths":`)
+
+		_, err := ReadConfig()
+		if err == nil {
+			t.Fatal("expected malformed config error")
+		}
+		if !strings.Contains(err.Error(), "parse valet config") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
 func TestBuildPlanImportsLinkedSites(t *testing.T) {
 	fakeHome(t)
 	app := filepath.Join(t.TempDir(), "app")
@@ -87,6 +114,32 @@ server {
 	}
 }
 
+func TestBuildPlanResolvesRelativeSymlinkTargets(t *testing.T) {
+	fakeHome(t)
+	projectRoot := filepath.Join(valetPath("Sites"), "..", "projects", "app")
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(valetPath("Sites"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "projects", "app"), valetPath("Sites", "app")); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := BuildPlan(&ValetConfig{Domain: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Links) != 1 {
+		t.Fatalf("links = %#v", plan.Links)
+	}
+	wantPath := filepath.Clean(projectRoot)
+	if plan.Links[0].Name != "app" || plan.Links[0].Path != wantPath {
+		t.Fatalf("link = %#v, want app path %q", plan.Links[0], wantPath)
+	}
+}
+
 func TestBuildPlanToleratesMissingSitesDirectory(t *testing.T) {
 	fakeHome(t)
 
@@ -99,6 +152,18 @@ func TestBuildPlanToleratesMissingSitesDirectory(t *testing.T) {
 	}
 	if len(plan.Links) != 0 {
 		t.Fatalf("links = %#v", plan.Links)
+	}
+}
+
+func TestNginxRootTrimsQuotesAndWhitespace(t *testing.T) {
+	fakeHome(t)
+	sitePath := filepath.Join(t.TempDir(), "my app")
+	root := filepath.Join(sitePath, "public path")
+	writeValetFile(t, filepath.Join("Nginx", "app.test"), "\n\troot   '"+root+"' ;\n")
+
+	got := nginxRoot("app", sitePath)
+	if got != "public path" {
+		t.Fatalf("nginxRoot() = %q, want relative public path", got)
 	}
 }
 
