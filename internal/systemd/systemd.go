@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	"github.com/scottzirkel/hostr/internal/caddyconf"
@@ -49,6 +50,11 @@ type unitData struct {
 	DNSPort   int
 }
 
+type UnitFile struct {
+	Name    string
+	Content string
+}
+
 func WriteUserUnits(dnsPort int) error {
 	dir := paths.SystemdUserDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -61,35 +67,52 @@ func WriteUserUnits(dnsPort int) error {
 	if resolved, err := filepath.EvalSymlinks(bin); err == nil {
 		bin = resolved
 	}
-	data := unitData{
-		HostrBin:  bin,
-		Caddyfile: caddyconf.Path(),
-		DNSPort:   dnsPort,
-	}
-	if err := writeUnit(dir, "hostr-dns.service", dnsUnit, data); err != nil {
+	units, err := RenderUserUnitFiles(dnsPort, bin)
+	if err != nil {
 		return err
 	}
-	if err := writeUnit(dir, "hostr-caddy.service", caddyUnit, data); err != nil {
-		return err
+	for _, unit := range units {
+		if err := os.WriteFile(filepath.Join(dir, unit.Name), []byte(unit.Content), 0o644); err != nil {
+			return err
+		}
 	}
 	return DaemonReload()
 }
 
-func writeUnit(dir, name, tmpl string, data any) error {
+func RenderUserUnitFiles(dnsPort int, hostrBin string) ([]UnitFile, error) {
+	data := unitData{
+		HostrBin:  hostrBin,
+		Caddyfile: caddyconf.Path(),
+		DNSPort:   dnsPort,
+	}
+	units := []struct {
+		name string
+		tmpl string
+	}{
+		{"hostr-dns.service", dnsUnit},
+		{"hostr-caddy.service", caddyUnit},
+	}
+	out := make([]UnitFile, 0, len(units))
+	for _, unit := range units {
+		content, err := renderUnit(unit.name, unit.tmpl, data)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, UnitFile{Name: unit.name, Content: content})
+	}
+	return out, nil
+}
+
+func renderUnit(name, tmpl string, data any) (string, error) {
 	t, err := template.New(name).Parse(tmpl)
 	if err != nil {
-		return err
+		return "", err
 	}
-	path := filepath.Join(dir, name)
-	f, err := os.Create(path)
-	if err != nil {
-		return err
+	var b strings.Builder
+	if err := t.Execute(&b, data); err != nil {
+		return "", fmt.Errorf("render %s: %w", name, err)
 	}
-	defer f.Close()
-	if err := t.Execute(f, data); err != nil {
-		return fmt.Errorf("render %s: %w", name, err)
-	}
-	return nil
+	return b.String(), nil
 }
 
 func DaemonReload() error {

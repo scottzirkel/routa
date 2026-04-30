@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -42,6 +44,7 @@ func runInstall(_ *cobra.Command, _ []string) error {
 		name string
 		fn   func() error
 	}{
+		{"check dependencies", checkInstallDependencies},
 		{"create directories", ensureDirs},
 		{"render Caddyfile", func() error { return caddyconf.Write(caddyconf.PhaseOne()) }},
 		{"write systemd user units", func() error { return systemd.WriteUserUnits(phaseOneDNSPort) }},
@@ -78,6 +81,29 @@ func waitForCaddyAdmin() error {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return fmt.Errorf("Caddy admin API at 127.0.0.1:2019 didn't come up within 8s — check `systemctl --user status hostr-caddy`")
+}
+
+func checkInstallDependencies() error {
+	missing := missingInstallDependencies(exec.LookPath)
+	if len(missing) == 0 {
+		return nil
+	}
+	return installDependencyError(missing)
+}
+
+func installDependencyError(missing []string) error {
+	return fmt.Errorf("missing required command(s): %s. Install dependencies with: sudo pacman -S caddy p11-kit systemd", strings.Join(missing, ", "))
+}
+
+func missingInstallDependencies(lookPath func(string) (string, error)) []string {
+	required := []string{"caddy", "trust", "systemctl"}
+	var missing []string
+	for _, name := range required {
+		if _, err := lookPath(name); err != nil {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 func ensureDirs() error {
