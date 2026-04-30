@@ -71,15 +71,14 @@ The initial release line was reconstructed from the first commits:
 - `v0.5.0`: 1.0 roadmap organization, `doctor --json`, state file versioning, Caddy log rotation, migration/root coverage, release workflow, and expanded routing/cutover tests.
 - `v0.5.1`: proxy target validation, PHP-FPM uninstall cleanup, safer rollback resolver restoration, corrected Phase 1 detection with existing systemd-resolved, and cutover guard for missing systemd-networkd `.network` files.
 - `v0.5.2`: purge safety guard and extra routing/migration coverage.
+- `v0.6.0`: routing, install, uninstall, cutover, rollback, and Valet migration coverage; documented systemd-networkd requirements, rollback resolver behavior, purge scope, and source/tag-only release policy.
 
 ## Pending Release Notes
 
-### v0.6.0
+### v0.7.0
 
-- Added routing coverage for custom roots, linked-site precedence, secure toggle rendering, and missing-docroot status output.
-- Added install preflight dependency checks for `caddy`, `trust`, and `systemctl` before install side effects.
-- Added pure systemd unit rendering coverage without starting or reloading services.
-- Added uninstall unit discovery edge coverage for PHP-FPM runtime and enabled units.
-- Added cutover/rollback partial-state helper coverage and sudo block ordering checks.
-- Added Valet migration coverage for missing/malformed config, relative symlinks, quoted roots, and whitespace.
-- Documented systemd-networkd `.network` requirements, rollback resolver behavior, purge scope, and the source/tag-only release artifact policy.
+- Made `hostr init` fail fast when required binaries such as `caddy` or
+  `trust` are missing, while keeping optional `dnsmasq` detection
+  informational.
+- Clarified install dependency guidance for non-Arch Linux distributions.
+- Corrected `hostr doctor --probe` help text to say it sends HEAD requests.

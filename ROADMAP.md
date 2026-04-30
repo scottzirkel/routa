@@ -15,6 +15,8 @@ trying to become a full-stack desktop dev suite.
     unit discovery.
   - Cutover/rollback now has partial-state helper coverage and sudo block
     ordering checks.
+  - `hostr init` now treats missing required dependencies as blocking
+    diagnostics instead of reporting a pass before `hostr install` fails.
   - `v0.5.1` added baseline hardening for proxy target validation,
     PHP-FPM cleanup during uninstall, safer rollback resolver restoration,
     existing systemd-resolved detection, and cutover refusal when no
