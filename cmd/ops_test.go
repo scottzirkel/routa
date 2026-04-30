@@ -1,9 +1,14 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/scottzirkel/hostr/internal/site"
 )
 
 func TestDoctorReportJSONShape(t *testing.T) {
@@ -106,5 +111,43 @@ func TestNormalizeProxyTarget(t *testing.T) {
 				t.Fatalf("target = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestStatusReportsMissingCustomDocroot(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	root := t.TempDir()
+	missingDocroot := filepath.Join(root, "missing")
+	if err := site.Save(&site.State{
+		Links: []site.Link{{Name: "app", Path: root, Root: "missing", Secure: false}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	statusCmd.SetOut(&out)
+	statusCmd.SetErr(&bytes.Buffer{})
+	t.Cleanup(func() {
+		statusCmd.SetOut(os.Stdout)
+		statusCmd.SetErr(os.Stderr)
+	})
+
+	if err := statusCmd.RunE(statusCmd, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	body := out.String()
+	for _, want := range []string{
+		"NAME",
+		"app.test",
+		"static",
+		"no",
+		missingDocroot,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("status output missing %q:\n%s", want, body)
+		}
 	}
 }

@@ -307,6 +307,55 @@ func TestWriteFragmentsQuotesPathsAndUsesHTTPForInsecureSites(t *testing.T) {
 	}
 }
 
+func TestWriteFragmentsSecureToggleForStaticSites(t *testing.T) {
+	tests := []struct {
+		name       string
+		secure     bool
+		want       []string
+		wantAbsent []string
+	}{
+		{
+			name:   "secure",
+			secure: true,
+			want:   []string{"app.test {", "tls internal"},
+		},
+		{
+			name:       "insecure",
+			secure:     false,
+			want:       []string{"http://app.test {", "# secure=false: HTTP only"},
+			wantAbsent: []string{"tls internal"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_DATA_HOME", t.TempDir())
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+			if err := WriteFragments([]Resolved{{
+				Name:    "app",
+				Docroot: t.TempDir(),
+				Kind:    KindStatic,
+				Secure:  tt.secure,
+			}}); err != nil {
+				t.Fatal(err)
+			}
+
+			content := readFragment(t, "app")
+			for _, want := range tt.want {
+				if !strings.Contains(content, want) {
+					t.Fatalf("rendered fragment missing %q:\n%s", want, content)
+				}
+			}
+			for _, unwanted := range tt.wantAbsent {
+				if strings.Contains(content, unwanted) {
+					t.Fatalf("rendered fragment should not include %q:\n%s", unwanted, content)
+				}
+			}
+		})
+	}
+}
+
 func TestWriteFragmentsRendersPHPSiteWithSocket(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
