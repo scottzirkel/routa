@@ -17,6 +17,8 @@ trying to become a full-stack desktop dev suite.
     ordering checks.
   - `hostr init` now treats missing required dependencies as blocking
     diagnostics instead of reporting a pass before `hostr install` fails.
+  - `v0.7.0` tightened prerequisite diagnostics and `hostr doctor` service
+    failure output.
   - `v0.5.1` added baseline hardening for proxy target validation,
     PHP-FPM cleanup during uninstall, safer rollback resolver restoration,
     existing systemd-resolved detection, and cutover refusal when no

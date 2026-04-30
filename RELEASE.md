@@ -72,15 +72,10 @@ The initial release line was reconstructed from the first commits:
 - `v0.5.1`: proxy target validation, PHP-FPM uninstall cleanup, safer rollback resolver restoration, corrected Phase 1 detection with existing systemd-resolved, and cutover guard for missing systemd-networkd `.network` files.
 - `v0.5.2`: purge safety guard and extra routing/migration coverage.
 - `v0.6.0`: routing, install, uninstall, cutover, rollback, and Valet migration coverage; documented systemd-networkd requirements, rollback resolver behavior, purge scope, and source/tag-only release policy.
+- `v0.7.0`: required dependency diagnostics fail fast in `hostr init`, install dependency guidance is distro-neutral, and `hostr doctor` preserves service-check failure details.
 
 ## Pending Release Notes
 
-### v0.7.0
+### v1.0.0
 
-- Made `hostr init` fail fast when required binaries such as `caddy` or
-  `trust` are missing, while keeping optional `dnsmasq` detection
-  informational.
-- Clarified install dependency guidance for non-Arch Linux distributions.
-- Corrected `hostr doctor --probe` help text to say it sends HEAD requests.
-- Preserved `systemctl` failure details in `hostr doctor` service output instead
-  of showing a blank status when a unit check fails without stdout.
+- No pending release notes yet.
