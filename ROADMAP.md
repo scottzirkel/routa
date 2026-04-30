@@ -9,8 +9,12 @@ enough to treat the CLI and config shape as a real contract. This milestone is n
 trying to become a full-stack desktop dev suite.
 
 - **Installation and rollback confidence**
-  - Harden `hostr install` and `hostr uninstall --purge`.
-  - Continue adding tests around cutover, rollback, and partial-state recovery.
+  - `hostr install` now checks required commands before side effects and has
+    pure unit-rendering coverage.
+  - `hostr uninstall --purge` has helper coverage for purge scope and PHP-FPM
+    unit discovery.
+  - Cutover/rollback now has partial-state helper coverage and sudo block
+    ordering checks.
   - `v0.5.1` added baseline hardening for proxy target validation,
     PHP-FPM cleanup during uninstall, safer rollback resolver restoration,
     existing systemd-resolved detection, and cutover refusal when no
@@ -22,19 +26,22 @@ trying to become a full-stack desktop dev suite.
   - Treat `~/.config/hostr/state.json` as a stable contract.
   - Add explicit migrations when a future state version changes shape.
 - **Core routing correctness**
-  - Continue expanding edge-case tests for site detection, custom roots, linked
-    sites, parked dirs, proxies, secure toggle, and missing docroots.
+  - Continue expanding edge-case tests for site detection, parked dirs, proxies,
+    and more path combinations.
+  - Custom roots, linked-site overrides, secure toggle rendering, and
+    missing-docroot status output now have focused coverage.
   - Proxy targets now validate before state is saved or Caddy fragments render;
     continue testing more routing combinations.
 - **Migration reliability**
-  - Continue covering parked dirs, linked dirs, Nginx custom roots, isolated PHP versions,
-    and missing/weird legacy config.
+  - Continue covering more unusual legacy Valet layouts.
+  - Missing/malformed config, relative symlinks, quoted Nginx roots, whitespace,
+    custom roots, and isolated PHP versions now have focused coverage.
 - **Supportability**
   - Review error messages for service failures, DNS failures, cert trust
     failures, and port conflicts.
 - **Distribution**
-  - Decide whether prebuilt binary artifacts should be attached to every GitHub
-    release or only larger milestones.
+  - Current policy: GitHub releases are source/tag-only until a binary artifact
+    policy is chosen.
   - Tagged releases with proper semver; `hostr version` already prints
     `git describe`.
 - **Docs pass**

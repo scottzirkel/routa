@@ -18,8 +18,9 @@ var uninstallCmd = &cobra.Command{
 	Use:   "uninstall",
 	Short: "Reverse `hostr install` — stop services, remove units, untrust CA",
 	Long: `Stops hostr-caddy and hostr-dns, removes their unit files, and untrusts
-the local CA. Does NOT touch sites/PHP versions you've installed — pass
---purge to remove ~/.local/share/hostr/ and ~/.config/hostr/ as well.`,
+the local CA. By default it keeps hostr state and installed PHP builds. Pass
+--purge to remove hostr-owned XDG state/data/config directories as well. Purge
+does not delete your website/project directories referenced by parked dirs or links.`,
 	RunE: runUninstall,
 }
 

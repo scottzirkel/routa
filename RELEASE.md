@@ -47,8 +47,8 @@ Before `v1.0.0`, minor releases may still include breaking changes, but prefer c
    git push origin main --tags
    ```
 
-7. Create the GitHub release from the pushed tag. Attach prebuilt artifacts if
-   publishing binaries for that release.
+7. Create the GitHub release from the pushed tag. Current policy: releases are
+   source/tag-only unless a release note explicitly says binaries are attached.
 
 8. Verify locally:
 
@@ -70,3 +70,16 @@ The initial release line was reconstructed from the first commits:
 - `v0.4.1`: release process documentation.
 - `v0.5.0`: 1.0 roadmap organization, `doctor --json`, state file versioning, Caddy log rotation, migration/root coverage, release workflow, and expanded routing/cutover tests.
 - `v0.5.1`: proxy target validation, PHP-FPM uninstall cleanup, safer rollback resolver restoration, corrected Phase 1 detection with existing systemd-resolved, and cutover guard for missing systemd-networkd `.network` files.
+- `v0.5.2`: purge safety guard and extra routing/migration coverage.
+
+## Pending Release Notes
+
+### v0.6.0
+
+- Added routing coverage for custom roots, linked-site precedence, secure toggle rendering, and missing-docroot status output.
+- Added install preflight dependency checks for `caddy`, `trust`, and `systemctl` before install side effects.
+- Added pure systemd unit rendering coverage without starting or reloading services.
+- Added uninstall unit discovery edge coverage for PHP-FPM runtime and enabled units.
+- Added cutover/rollback partial-state helper coverage and sudo block ordering checks.
+- Added Valet migration coverage for missing/malformed config, relative symlinks, quoted roots, and whitespace.
+- Documented systemd-networkd `.network` requirements, rollback resolver behavior, purge scope, and the source/tag-only release artifact policy.

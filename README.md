@@ -19,9 +19,9 @@ It serves local sites under `.test`, binds Caddy to localhost, and manages PHP
 through static builds under `~/.local/share/hostr/php/`.
 
 Intentionally out of scope: a GUI app, automatic in-place binary updates, macOS
-support, non-systemd init systems, and arbitrary local TLDs. Use the release
-artifacts or your OS package manager when available; otherwise rebuild with
-`git pull && bash install.sh`.
+support, non-systemd init systems, and arbitrary local TLDs. GitHub releases are
+currently source/tag releases only; build locally with `git pull && bash
+install.sh` until a binary artifact policy is chosen.
 
 ## Quick start
 
@@ -221,6 +221,12 @@ instead of guessing how to interpret it.
 
 The per-link config goes in `/etc/systemd/network/<file>.d/hostr.conf` (one per existing `.network` file). Global routing via `/etc/systemd/resolved.conf.d/` doesn't pin queries to a specific server, so per-link is the only way to reliably route a single domain.
 
+Cutover requires at least one `/etc/systemd/network/*.network` file. `hostr
+cutover` refuses to run its sudo block if no `.network` files exist, before
+changing resolver or port settings. If your machine uses NetworkManager without
+systemd-networkd `.network` files, stay on Phase 1 or add a networkd-managed
+link before running cutover.
+
 ## Troubleshooting
 
 - **A site does not resolve:** run `hostr doctor`. In Phase 1, query hostr DNS
@@ -229,6 +235,10 @@ The per-link config goes in `/etc/systemd/network/<file>.d/hostr.conf` (one per 
 - **Caddy is not on the expected port:** run `hostr restart caddy` and then
   `hostr doctor`. If the cutover phase is partial, re-run `hostr cutover` or
   `hostr cutover --rollback` to converge.
+- **Rollback resolver behavior:** `hostr cutover --rollback` removes hostr's
+  per-link routing. The sudo rollback block restores `/etc/resolv.conf` to
+  Valet's resolver file when `/opt/valet-linux/resolv.conf` exists; otherwise it
+  restores systemd-resolved's stub resolver.
 - **A PHP site returns 503:** install or select a PHP version with
   `hostr php install <ver>` and `hostr php use <ver>`, or isolate the site with
   `hostr isolate <site> <ver>`.
@@ -242,5 +252,9 @@ The per-link config goes in `/etc/systemd/network/<file>.d/hostr.conf` (one per 
 
 ```bash
 hostr cutover --rollback        # if cutover was done
-hostr uninstall --purge         # remove services, untrust CA, wipe ~/.local/share/hostr ~/.config/hostr
+hostr uninstall --purge         # remove services, untrust CA, wipe hostr state/data/config
 ```
+
+`--purge` deletes hostr-owned XDG directories named `hostr`
+(`~/.local/share/hostr`, `~/.local/state/hostr`, and `~/.config/hostr`). It does
+not delete your website/project directories referenced by parked dirs or links.
