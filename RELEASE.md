@@ -78,4 +78,9 @@ The initial release line was reconstructed from the first commits:
 
 ### v1.0.0
 
-- No pending release notes yet.
+- Added clearer `hostr doctor` diagnostics for DNS failures and likely HTTPS
+  port ownership conflicts.
+- Improved certificate trust failure messages around missing Caddy roots and
+  failed `trust anchor` actions.
+- Documented the completed DNS, port, and certificate troubleshooting paths for
+  the stable v1 Linux support contract.

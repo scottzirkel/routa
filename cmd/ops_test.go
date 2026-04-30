@@ -105,6 +105,36 @@ func TestDoctorServiceStatusFallsBackToError(t *testing.T) {
 	}
 }
 
+func TestCaddyAddrLabelReportsLikelyPortOwnerConflict(t *testing.T) {
+	got := caddyAddrLabel(true, false, false)
+
+	if !strings.Contains(got, "another process may own standard HTTPS") {
+		t.Fatalf("label = %q", got)
+	}
+}
+
+func TestParseHostrDNSOutputFindsARecord(t *testing.T) {
+	got := parseHostrDNSOutput("doctor.hostr.test.\t60\tIN\tA\t127.0.0.1\n")
+
+	if got.Answer != "127.0.0.1" {
+		t.Fatalf("answer = %q", got.Answer)
+	}
+	if got.Detail != "" {
+		t.Fatalf("detail = %q, want empty", got.Detail)
+	}
+}
+
+func TestParseHostrDNSOutputPreservesNoAnswerDetail(t *testing.T) {
+	got := parseHostrDNSOutput("doctor.hostr.test.\t60\tIN\tNXDOMAIN\n")
+
+	if got.Answer != "(no answer)" {
+		t.Fatalf("answer = %q", got.Answer)
+	}
+	if !strings.Contains(got.Detail, "NXDOMAIN") {
+		t.Fatalf("detail = %q", got.Detail)
+	}
+}
+
 func TestNormalizeProxyTarget(t *testing.T) {
 	tests := []struct {
 		name    string

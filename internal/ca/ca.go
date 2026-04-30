@@ -1,5 +1,5 @@
-// Package ca installs Caddy's auto-generated root CA into the Arch system
-// trust store via p11-kit's `trust anchor`.
+// Package ca installs Caddy's auto-generated root CA into the system trust
+// store via p11-kit's `trust anchor`.
 //
 // We deliberately don't use `caddy trust` here — its embedded sudo invocation
 // was unreliable in our environment (silent exit 1, no prompt visible).
@@ -22,7 +22,10 @@ func Install() error {
 	if err := preAuth("install the local root CA into /etc/ca-certificates/"); err != nil {
 		return err
 	}
-	return runSudo("trust", "anchor", "--store", src)
+	if err := runSudo("trust", "anchor", "--store", src); err != nil {
+		return trustCommandError("store", src, err)
+	}
+	return nil
 }
 
 func Uninstall() error {
@@ -33,7 +36,10 @@ func Uninstall() error {
 	if err := preAuth("remove the local root CA from /etc/ca-certificates/"); err != nil {
 		return err
 	}
-	return runSudo("trust", "anchor", "--remove", src)
+	if err := runSudo("trust", "anchor", "--remove", src); err != nil {
+		return trustCommandError("remove", src, err)
+	}
+	return nil
 }
 
 func rootPath() (string, error) {
@@ -43,9 +49,13 @@ func rootPath() (string, error) {
 	}
 	p := filepath.Join(home, ".local/share/caddy/pki/authorities/local/root.crt")
 	if _, err := os.Stat(p); err != nil {
-		return "", fmt.Errorf("Caddy root not found at %s — is hostr-caddy running? (`systemctl --user status hostr-caddy`): %w", p, err)
+		return "", fmt.Errorf("Caddy root not found at %s — start hostr-caddy with `hostr install` or `hostr restart caddy`, then check `systemctl --user status hostr-caddy` if it still does not exist: %w", p, err)
 	}
 	return p, nil
+}
+
+func trustCommandError(action, cert string, err error) error {
+	return fmt.Errorf("trust anchor --%s failed for %s: %w. Confirm p11-kit trust is installed and the system trust store is writable", action, cert, err)
 }
 
 func preAuth(reason string) error {

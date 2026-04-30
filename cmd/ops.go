@@ -277,6 +277,7 @@ type doctorDNS struct {
 	Name     string `json:"name"`
 	Answer   string `json:"answer"`
 	Expected string `json:"expected"`
+	Detail   string `json:"detail,omitempty"`
 }
 
 type doctorCutover struct {
@@ -319,24 +320,26 @@ func collectDoctorReport(withProbes bool) (doctorReport, error) {
 		report.Services = append(report.Services, doctorServiceStatus(u, systemctlUserIsActive))
 	}
 
+	caddyActive := serviceActive(report.Services, "hostr-caddy.service")
 	caddyAdminOK := httpOK("http://127.0.0.1:2019/config/")
 	std := portBound(":443") || portBound("127.0.0.1:443")
 	alt := portBound("127.0.0.1:8443")
 	hostrDNSOK := portBound("127.0.0.1:1053")
 	report.Network = doctorNetwork{
 		CaddyAdmin: doctorEndpoint{Name: "caddy admin", OK: caddyAdminOK, Detail: "127.0.0.1:2019 (" + upDown(caddyAdminOK) + ")"},
-		CaddyHTTPS: doctorEndpoint{Name: "caddy https", OK: std || alt, Detail: caddyAddrLabel(std, alt)},
+		CaddyHTTPS: doctorEndpoint{Name: "caddy https", OK: std || alt, Detail: caddyAddrLabel(std, alt, caddyActive)},
 		HostrDNS:   doctorEndpoint{Name: "hostr-dns", OK: hostrDNSOK, Detail: "127.0.0.1:1053 (" + upDown(hostrDNSOK) + ")"},
 	}
 
 	const dnsName = "doctor.hostr.test"
 	const expectedDNS = "127.0.0.1"
-	ans := queryHostrDNS(dnsName)
+	dnsResult := queryHostrDNS(dnsName)
 	report.DNS = doctorDNS{
-		OK:       ans == expectedDNS,
+		OK:       dnsResult.Answer == expectedDNS,
 		Name:     dnsName,
-		Answer:   ans,
+		Answer:   dnsResult.Answer,
 		Expected: expectedDNS,
+		Detail:   dnsResult.Detail,
 	}
 
 	phase := cutover.Detect()
@@ -391,6 +394,15 @@ func doctorServiceStatus(unit string, isActive func(string) ([]byte, error)) doc
 	}
 }
 
+func serviceActive(services []doctorService, name string) bool {
+	for _, service := range services {
+		if service.Name == name {
+			return service.OK
+		}
+	}
+	return false
+}
+
 func systemctlUserIsActive(unit string) ([]byte, error) {
 	return exec.Command("systemctl", "--user", "is-active", unit).CombinedOutput()
 }
@@ -409,7 +421,10 @@ func renderDoctorText(cmd *cobra.Command, report doctorReport) error {
 	fmt.Fprintf(out, "  %s  %-17s %s\n", mark(report.Network.HostrDNS.OK), report.Network.HostrDNS.Name, report.Network.HostrDNS.Detail)
 
 	fmt.Fprintln(out, "\nDNS")
-	fmt.Fprintf(out, "  %s  hostr-dns answers *.test → %s\n", mark(report.DNS.OK), report.DNS.Answer)
+	fmt.Fprintf(out, "  %s  hostr-dns answers %s -> %s (expected %s)\n", mark(report.DNS.OK), report.DNS.Name, report.DNS.Answer, report.DNS.Expected)
+	if report.DNS.Detail != "" {
+		fmt.Fprintf(out, "     %s\n", report.DNS.Detail)
+	}
 
 	fmt.Fprintln(out, "\nCutover")
 	fmt.Fprintf(out, "  %s\n", report.Cutover.Label)
@@ -496,16 +511,28 @@ func upDown(ok bool) string {
 	return "down"
 }
 
-func caddyAddrLabel(std, alt bool) string {
+func caddyAddrLabel(std, alt bool, caddyActive bool) string {
 	switch {
 	case std && alt:
-		return "127.0.0.1:443 + 127.0.0.1:8443  (both — rollback didn't release alt?)"
+		if !caddyActive {
+			return "127.0.0.1:443 + 127.0.0.1:8443  (bound while hostr-caddy is not active; check for another owner)"
+		}
+		return "127.0.0.1:443 + 127.0.0.1:8443  (both; rollback may not have released alt)"
 	case std:
+		if !caddyActive {
+			return "127.0.0.1:443  (bound while hostr-caddy is not active; another process may own standard HTTPS)"
+		}
 		return "127.0.0.1:443  (Phase 2)"
 	case alt:
+		if !caddyActive {
+			return "127.0.0.1:8443  (bound while hostr-caddy is not active; another process may own hostr's alt HTTPS)"
+		}
 		return "127.0.0.1:8443  (Phase 1)"
 	}
-	return "(not bound!)"
+	if caddyActive {
+		return "(not bound; hostr-caddy is active, check Caddy logs)"
+	}
+	return "(not bound; hostr-caddy is not active)"
 }
 
 func phaseLabel(p cutover.Phase) string {
@@ -528,21 +555,34 @@ func cutoverPhaseName(p cutover.Phase) string {
 	return "partial"
 }
 
-func queryHostrDNS(name string) string {
+type dnsQueryResult struct {
+	Answer string
+	Detail string
+}
+
+func queryHostrDNS(name string) dnsQueryResult {
 	out, err := exec.Command(os.Args[0], "query", name).CombinedOutput()
 	if err != nil {
-		return "(error)"
+		detail := strings.TrimSpace(string(out))
+		if detail == "" {
+			detail = err.Error()
+		}
+		return dnsQueryResult{Answer: "(error)", Detail: detail}
 	}
+	return parseHostrDNSOutput(string(out))
+}
+
+func parseHostrDNSOutput(out string) dnsQueryResult {
 	for _, line := range strings.Split(string(out), "\n") {
 		// `hostr query` prints lines like: name.\t60\tIN\tA\t127.0.0.1
 		fields := strings.Fields(line)
 		for i, f := range fields {
 			if f == "A" && i < len(fields)-1 {
-				return fields[i+1]
+				return dnsQueryResult{Answer: fields[i+1]}
 			}
 		}
 	}
-	return "(no answer)"
+	return dnsQueryResult{Answer: "(no answer)", Detail: strings.TrimSpace(out)}
 }
 
 // --- tui (still stub) -----------------------------------------------------

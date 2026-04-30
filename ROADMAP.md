@@ -42,8 +42,12 @@ trying to become a full-stack desktop dev suite.
     custom roots, and isolated PHP versions now have focused coverage.
 - **Supportability**
   - Service failure diagnostics now preserve `systemctl` error details in
-    `hostr doctor`; continue reviewing DNS failures, cert trust failures, and
-    port conflicts.
+    `hostr doctor`.
+  - DNS failures now preserve raw query details in `hostr doctor`.
+  - Cert trust errors now name the missing Caddy root or failed `trust anchor`
+    action with a p11-kit/system trust store hint.
+  - Port diagnostics now call out likely ownership conflicts when HTTPS ports
+    are bound while `hostr-caddy` is not active.
 - **Distribution**
   - Current policy: GitHub releases are source/tag-only until a binary artifact
     policy is chosen.

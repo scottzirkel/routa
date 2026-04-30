@@ -231,10 +231,13 @@ link before running cutover.
 
 - **A site does not resolve:** run `hostr doctor`. In Phase 1, query hostr DNS
   directly with `hostr query app.test`; system-wide `.test` routing only happens
-  after `hostr cutover`.
+  after `hostr cutover`. `hostr doctor` shows the DNS answer, expected answer,
+  and any raw query output when hostr-dns does not return an A record.
 - **Caddy is not on the expected port:** run `hostr restart caddy` and then
   `hostr doctor`. If the cutover phase is partial, re-run `hostr cutover` or
-  `hostr cutover --rollback` to converge.
+  `hostr cutover --rollback` to converge. If HTTPS ports are bound while
+  `hostr-caddy` is inactive, `hostr doctor` calls that out as a likely port
+  ownership conflict.
 - **Rollback resolver behavior:** `hostr cutover --rollback` removes hostr's
   per-link routing. The sudo rollback block restores `/etc/resolv.conf` to
   Valet's resolver file when `/opt/valet-linux/resolv.conf` exists; otherwise it
@@ -243,7 +246,9 @@ link before running cutover.
   `hostr php install <ver>` and `hostr php use <ver>`, or isolate the site with
   `hostr isolate <site> <ver>`.
 - **Certificates are not trusted:** re-run `hostr install` to reinstall the
-  local CA, then restart browsers that cache trust state.
+  local CA. If it fails, the error names the Caddy root path and the failed
+  `trust anchor` action. Confirm p11-kit is installed and restart browsers that
+  cache trust state.
 - **Imported sites look wrong:** run `hostr migrate-from-valet --dry-run`
   and check the planned links, roots, HTTPS status, and PHP versions before
   applying.
