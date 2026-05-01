@@ -22,6 +22,8 @@ var phpCmd = &cobra.Command{
 	Short:              "Run routa PHP for the current site, or manage installed PHP versions",
 	Args:               cobra.ArbitraryArgs,
 	DisableFlagParsing: true,
+	SilenceUsage:       true,
+	SilenceErrors:      true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runPHPProxy(cmd, args)
 	},
@@ -32,6 +34,8 @@ var composerCmd = &cobra.Command{
 	Short:              "Run Composer with the routa PHP version for the current site",
 	Args:               cobra.ArbitraryArgs,
 	DisableFlagParsing: true,
+	SilenceUsage:       true,
+	SilenceErrors:      true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runComposerProxy(cmd, args)
 	},
@@ -483,7 +487,28 @@ func runWithRoutaPHP(ctx *phpCLIContext, name string, args []string) error {
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	c.Env = envWithRoutaPHP(ctx)
-	return c.Run()
+	if err := c.Run(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			return childExitError{code: exit.ExitCode()}
+		}
+		return err
+	}
+	return nil
+}
+
+type childExitError struct {
+	code int
+}
+
+func (e childExitError) Error() string {
+	return fmt.Sprintf("exit status %d", e.code)
+}
+
+func (e childExitError) ExitCode() int {
+	if e.code < 0 {
+		return 1
+	}
+	return e.code
 }
 
 func envWithRoutaPHP(ctx *phpCLIContext) []string {

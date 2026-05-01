@@ -22,6 +22,9 @@ systemd user units. No daemon of its own.`,
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		if exit, ok := err.(interface{ ExitCode() int }); ok {
+			os.Exit(exit.ExitCode())
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
