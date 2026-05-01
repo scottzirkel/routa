@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/scottzirkel/routa/internal/site"
 )
 
 func TestINISettingsRoundTrip(t *testing.T) {
@@ -77,6 +79,72 @@ func TestWriteFPMConfigIncludesINISettings(t *testing.T) {
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("rendered config missing %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestWriteFPMConfigIncludesSiteEnvPool(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	project := filepath.Join(t.TempDir(), "app")
+	if err := os.MkdirAll(filepath.Join(project, "public"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		filepath.Join(project, "public", "index.php"): "<?php",
+		filepath.Join(project, ".env"):                "APP_ENV=local\nexport DB_DATABASE='routa app'\n# ignored\n",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := site.Save(&site.State{
+		DefaultPHP: "8.4",
+		Links:      []site.Link{{Name: "app", Path: project, Root: "public", Secure: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := WriteFPMConfig("8.4"); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(os.Getenv("XDG_STATE_HOME"), "routa", "run", "php-fpm-8.4.conf")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"[routa-app]",
+		"listen = " + filepath.Join(os.Getenv("XDG_STATE_HOME"), "routa", "run", "php-fpm-8.4-app.sock"),
+		"env[APP_ENV] = local",
+		"env[DB_DATABASE] = routa app",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("rendered config missing %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestLoadEnvFileParsesAndSortsSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("B=two\nexport A=\"one\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	env, err := LoadEnvFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []EnvSetting{{Key: "A", Value: "one"}, {Key: "B", Value: "two"}}
+	if len(env) != len(want) {
+		t.Fatalf("env = %#v", env)
+	}
+	for i := range want {
+		if env[i] != want[i] {
+			t.Fatalf("env[%d] = %#v, want %#v", i, env[i], want[i])
 		}
 	}
 }

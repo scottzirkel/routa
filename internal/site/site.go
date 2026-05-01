@@ -62,6 +62,7 @@ type Resolved struct {
 	PHP     string // resolved version (Link.PHP or DefaultPHP)
 	Secure  bool
 	AliasOf string
+	EnvFile string
 }
 
 var siteNameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$`)
@@ -286,6 +287,10 @@ func build(name, path, root, target, php string, secure bool, defaultPHP string)
 	if resolvedPHP == "" && kind == KindPHP {
 		resolvedPHP = defaultPHP
 	}
+	envFile := ""
+	if kind == KindPHP && exists(filepath.Join(path, ".env")) {
+		envFile = filepath.Join(path, ".env")
+	}
 	return Resolved{
 		Name:    name,
 		Path:    path,
@@ -293,6 +298,7 @@ func build(name, path, root, target, php string, secure bool, defaultPHP string)
 		Kind:    kind,
 		PHP:     resolvedPHP,
 		Secure:  secure,
+		EnvFile: envFile,
 	}
 }
 
@@ -540,7 +546,7 @@ func WriteFragments(sites []Resolved) error {
 			SiteAddress:   siteAddress(s),
 			TargetCaddy:   caddyQuote(s.Target),
 			DocrootCaddy:  caddyQuote(s.Docroot),
-			SockPathCaddy: caddyQuote("unix/" + filepath.Join(paths.RunDir(), fmt.Sprintf("php-fpm-%s.sock", s.PHP))),
+			SockPathCaddy: caddyQuote("unix/" + FPMSocketPath(s)),
 			LogFileCaddy:  caddyQuote(filepath.Join(paths.LogDir(), s.Name+".log")),
 		}
 		f, err := os.Create(filepath.Join(paths.SitesDir(), fragName(s.Name)))
@@ -563,6 +569,13 @@ func siteAddress(s Resolved) string {
 		return s.Name + ".test"
 	}
 	return "http://" + s.Name + ".test"
+}
+
+func FPMSocketPath(s Resolved) string {
+	if s.EnvFile != "" {
+		return filepath.Join(paths.RunDir(), fmt.Sprintf("php-fpm-%s-%s.sock", s.PHP, s.Name))
+	}
+	return filepath.Join(paths.RunDir(), fmt.Sprintf("php-fpm-%s.sock", s.PHP))
 }
 
 func caddyQuote(s string) string {

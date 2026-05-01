@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/scottzirkel/routa/internal/paths"
+	"github.com/scottzirkel/routa/internal/php"
 	"github.com/scottzirkel/routa/internal/site"
 )
 
@@ -712,7 +713,11 @@ func saveWriteReload(st *site.State) error {
 	if err := site.Save(st); err != nil {
 		return err
 	}
-	if err := site.WriteFragments(st.Resolve()); err != nil {
+	sites := st.Resolve()
+	if err := php.RefreshFPMConfigsForSites(sites); err != nil {
+		return err
+	}
+	if err := site.WriteFragments(sites); err != nil {
 		return err
 	}
 	return site.ReloadCaddy()

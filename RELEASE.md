@@ -85,3 +85,5 @@ The initial release line was reconstructed from the first commits:
   HTTPS config.
 - Add `routa track --root <path>` for tracked directories whose children all
   share the same docroot override, such as `dist/`.
+- Add per-site PHP `.env` passthrough through generated PHP-FPM pools and
+  per-site sockets.

@@ -74,7 +74,11 @@ func runMigrate(_ *cobra.Command, _ []string) error {
 	if err := site.Save(st); err != nil {
 		return err
 	}
-	if err := site.WriteFragments(st.Resolve()); err != nil {
+	sites := st.Resolve()
+	if err := php.RefreshFPMConfigsForSites(sites); err != nil {
+		return err
+	}
+	if err := site.WriteFragments(sites); err != nil {
 		return err
 	}
 	if err := site.ReloadCaddy(); err != nil {

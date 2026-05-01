@@ -599,6 +599,37 @@ func TestWriteFragmentsRendersPHPSiteWithSocket(t *testing.T) {
 	}
 }
 
+func TestWriteFragmentsRendersPHPSiteWithEnvSocket(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	project := t.TempDir()
+	docroot := filepath.Join(project, "public")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".env"), []byte("APP_ENV=local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(docroot, "index.php"), []byte("<?php"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved := (&State{
+		DefaultPHP: "8.4",
+		Links:      []Link{{Name: "app", Path: project, Root: "public", Secure: true}},
+	}).Resolve()
+	if err := WriteFragments(resolved); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readFragment(t, "app")
+	want := "php_fastcgi " + strconv.Quote("unix/"+filepath.Join(os.Getenv("XDG_STATE_HOME"), "routa", "run", "php-fpm-8.4-app.sock"))
+	if !strings.Contains(content, want) {
+		t.Fatalf("rendered fragment missing %q:\n%s", want, content)
+	}
+}
+
 func TestWriteFragmentsRendersMissingPHPFallback(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())

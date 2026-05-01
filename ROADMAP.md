@@ -12,6 +12,8 @@ priority, not commitment.
   config. `routa unalias <name>` removes them.
 - **Tracked-dir default root** — `routa track --root <path>` applies a shared
   docroot override to every immediate child of a tracked dir.
+- **Per-site env file passthrough** — PHP sites with a project `.env` get a
+  generated PHP-FPM pool and per-site socket with `env[FOO] = bar` entries.
 
 ### v1.3.0 — process-backed dev apps
 
@@ -102,9 +104,6 @@ trying to become a full-stack desktop dev suite.
 
 ## Near-term (small, well-scoped)
 
-- **Per-site env file passthrough** — let a site declare a `.env` whose vars
-  routa-php-fpm exports into the worker (`env[FOO] = bar` lines in the pool
-  config). Useful for sites that need different DB creds per env.
 - **More routing edge coverage** — keep adding unusual tracked-dir, linked-site,
   proxy, dev-server, and path-combination cases as they appear.
 

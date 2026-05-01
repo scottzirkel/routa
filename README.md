@@ -149,6 +149,21 @@ routa php ini edit 8.4
 routa php ini unset 8.4 memory_limit
 ```
 
+## Per-site environment
+
+For PHP sites, routa reads a project-level `.env` file and renders those values
+into a per-site PHP-FPM pool:
+
+```bash
+APP_ENV=local
+DB_DATABASE=my_app
+```
+
+When a PHP site has a `.env`, routa gives that site its own PHP-FPM socket so
+the values do not leak into other sites using the same PHP version. Run
+`routa reload` after editing `.env` so routa can regenerate and reload the
+matching PHP-FPM config.
+
 ## PHP extensions
 
 The bundled PHP builds use the upstream static-php-cli bulk profile. Extensions

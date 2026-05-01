@@ -32,7 +32,11 @@ var reloadCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := site.WriteFragments(s.Resolve()); err != nil {
+		sites := s.Resolve()
+		if err := php.RefreshFPMConfigsForSites(sites); err != nil {
+			return err
+		}
+		if err := site.WriteFragments(sites); err != nil {
 			return err
 		}
 		if err := site.ReloadCaddy(); err != nil {

@@ -251,7 +251,11 @@ var phpInstallCmd = &cobra.Command{
 			}
 			fmt.Printf("→ default PHP set to %s\n", st.DefaultPHP)
 		}
-		if err := site.WriteFragments(st.Resolve()); err != nil {
+		sites := st.Resolve()
+		if err := php.RefreshFPMConfigsForSites(sites); err != nil {
+			return err
+		}
+		if err := site.WriteFragments(sites); err != nil {
 			return err
 		}
 		if err := site.ReloadCaddy(); err != nil {
@@ -318,7 +322,11 @@ var phpUseCmd = &cobra.Command{
 		if err := site.Save(st); err != nil {
 			return err
 		}
-		if err := site.WriteFragments(st.Resolve()); err != nil {
+		sites := st.Resolve()
+		if err := php.RefreshFPMConfigsForSites(sites); err != nil {
+			return err
+		}
+		if err := site.WriteFragments(sites); err != nil {
 			return err
 		}
 		if err := site.ReloadCaddy(); err != nil {

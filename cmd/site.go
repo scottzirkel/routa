@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/scottzirkel/routa/internal/php"
 	"github.com/scottzirkel/routa/internal/site"
 )
 
@@ -345,7 +346,11 @@ func commitAndReload(s *site.State, msg string) error {
 	if err := site.Save(s); err != nil {
 		return err
 	}
-	if err := site.WriteFragments(s.Resolve()); err != nil {
+	sites := s.Resolve()
+	if err := php.RefreshFPMConfigsForSites(sites); err != nil {
+		return err
+	}
+	if err := site.WriteFragments(sites); err != nil {
 		return err
 	}
 	if err := site.ReloadCaddy(); err != nil {
