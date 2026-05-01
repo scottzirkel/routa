@@ -136,6 +136,36 @@ func TestResolveCombinesParkedDirsLinksProxyAndDefaultPHP(t *testing.T) {
 	}
 }
 
+func TestResolveAppliesParkedRootToEachChild(t *testing.T) {
+	parked := t.TempDir()
+	api := filepath.Join(parked, "api")
+	web := filepath.Join(parked, "web")
+	for _, dir := range []string{
+		filepath.Join(api, "dist"),
+		filepath.Join(web, "dist"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("ok"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	resolved := (&State{
+		Parked:      []string{parked},
+		ParkedRoots: map[string]string{parked: "dist"},
+	}).Resolve()
+
+	byName := resolvedByName(resolved)
+	if got := byName["api"]; got.Kind != KindStatic || got.Path != api || got.Docroot != filepath.Join(api, "dist") {
+		t.Fatalf("api = %#v", got)
+	}
+	if got := byName["web"]; got.Kind != KindStatic || got.Path != web || got.Docroot != filepath.Join(web, "dist") {
+		t.Fatalf("web = %#v", got)
+	}
+}
+
 func TestResolveSkipsIgnoredParkedSitesButAllowsExplicitLinks(t *testing.T) {
 	parked := t.TempDir()
 	for _, dir := range []string{"ignored", "visible"} {
@@ -278,6 +308,31 @@ func TestAliasMutationsReplaceSortAndRemove(t *testing.T) {
 	}
 	if len(state.Aliases) != 1 || state.Aliases[0].Name != "web" {
 		t.Fatalf("aliases after removal = %#v", state.Aliases)
+	}
+}
+
+func TestParkedMutationsSetReplaceAndRemoveRoot(t *testing.T) {
+	dir := t.TempDir()
+	state := &State{}
+	AddParked(state, dir, "dist")
+	AddParked(state, dir, "public")
+
+	if len(state.Parked) != 1 || state.Parked[0] != dir {
+		t.Fatalf("parked = %#v", state.Parked)
+	}
+	if got := state.ParkedRoots[dir]; got != "public" {
+		t.Fatalf("parked root = %q, want public", got)
+	}
+
+	AddParked(state, dir, "")
+	if _, exists := state.ParkedRoots[dir]; exists {
+		t.Fatalf("expected empty root to clear override: %#v", state.ParkedRoots)
+	}
+
+	AddParked(state, dir, "dist")
+	RemoveParked(state, dir)
+	if len(state.Parked) != 0 || state.ParkedRoots != nil {
+		t.Fatalf("state after remove = %#v", state)
 	}
 }
 

@@ -11,11 +11,16 @@ import (
 	"github.com/scottzirkel/routa/internal/site"
 )
 
+var trackRoot string
+
 var trackCmd = &cobra.Command{
 	Use:     "track [dir]",
 	Aliases: []string{"park"},
 	Short:   "Track a directory — every subdir becomes <name>.test",
-	Args:    cobra.MaximumNArgs(1),
+	Long: `Track a directory. Every immediate subdirectory becomes <name>.test.
+By default routa auto-detects each subdirectory's docroot. Use --root to apply
+the same docroot override to every discovered child, e.g. --root dist.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
 		dir, err := resolveDir(args)
 		if err != nil {
@@ -25,9 +30,17 @@ var trackCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		site.AddParked(s, dir)
-		return commitAndReload(s, fmt.Sprintf("tracking %s", dir))
+		site.AddParked(s, dir, trackRoot)
+		msg := fmt.Sprintf("tracking %s", dir)
+		if trackRoot != "" {
+			msg += fmt.Sprintf("  (root=%s)", trackRoot)
+		}
+		return commitAndReload(s, msg)
 	},
+}
+
+func init() {
+	trackCmd.Flags().StringVar(&trackRoot, "root", "", "override docroot for every tracked child (relative to each child, or absolute)")
 }
 
 var untrackCmd = &cobra.Command{
@@ -320,7 +333,7 @@ func resolvedHasName(resolved []site.Resolved, name string) bool {
 }
 
 func resolvedHasConcreteName(s *site.State, name string) bool {
-	for _, r := range (&site.State{Parked: s.Parked, Ignored: s.Ignored, Links: s.Links, DefaultPHP: s.DefaultPHP}).Resolve() {
+	for _, r := range (&site.State{Parked: s.Parked, ParkedRoots: s.ParkedRoots, Ignored: s.Ignored, Links: s.Links, DefaultPHP: s.DefaultPHP}).Resolve() {
 		if r.Name == name {
 			return true
 		}

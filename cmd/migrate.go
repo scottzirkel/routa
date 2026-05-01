@@ -66,7 +66,7 @@ func runMigrate(_ *cobra.Command, _ []string) error {
 		return err
 	}
 	for _, p := range plan.Parked {
-		site.AddParked(st, p)
+		site.AddParked(st, p, "")
 	}
 	for _, l := range plan.Links {
 		site.AddLink(st, l)

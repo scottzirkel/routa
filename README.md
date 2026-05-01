@@ -58,6 +58,7 @@ routa init                      # diagnose host resolver and required binaries
 routa install                   # provision services on alt ports (DNS :1053, :8080/:8443)
 routa php install 8.4           # fetch a static PHP build
 routa track ~/code              # any subdir of ~/code becomes <subdir>.test
+routa track ~/apps --root dist  # every child serves its own dist/ dir
 routa link                      # link the current dir as <basename>.test
 
 # When ready:
@@ -169,6 +170,13 @@ cd ~/code/some-vite-app
 routa link --root dist          # serves dist/ instead of the autodetect's choice
 ```
 
+Tracked directories can also apply the same root override to every immediate
+child:
+
+```bash
+routa track ~/apps --root dist  # app.test serves ~/apps/app/dist
+```
+
 ## Site aliases
 
 Use aliases when several `.test` names should serve the same site config:
@@ -271,12 +279,12 @@ prefix.
 |---|---|
 | `~/.local/share/routa/` | PHP builds, Caddyfile, site fragments, CA stash |
 | `~/.local/state/routa/` | sockets, logs, fpm runtime config |
-| `~/.config/routa/` | `state.json` (versioned tracked dirs, ignored sites, links, aliases, default PHP), PHP ini overrides |
+| `~/.config/routa/` | `state.json` (versioned tracked dirs, tracked roots, ignored sites, links, aliases, default PHP), PHP ini overrides |
 | `~/.config/systemd/user/routa-*.service` | `routa-dns`, `routa-caddy`, `routa-php@<spec>` |
 
 ## State file compatibility
 
-`~/.config/routa/state.json` is versioned. Current routa writes `version: 3`.
+`~/.config/routa/state.json` is versioned. Current routa writes `version: 4`.
 Pre-version state files are treated as the legacy v1 shape and migrated on the
 next save. If a future routa writes a newer state version, older binaries fail
 instead of guessing how to interpret it.

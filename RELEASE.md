@@ -83,3 +83,5 @@ The initial release line was reconstructed from the first commits:
 - Add `routa alias <existing> <new>` and `routa unalias <name>` for alternate
   `.test` hostnames that follow a target site's source, proxy, PHP, root, and
   HTTPS config.
+- Add `routa track --root <path>` for tracked directories whose children all
+  share the same docroot override, such as `dist/`.

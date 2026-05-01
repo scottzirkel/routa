@@ -41,15 +41,16 @@ type Alias struct {
 	Target string `json:"target"`
 }
 
-const CurrentStateVersion = 3
+const CurrentStateVersion = 4
 
 type State struct {
-	Version    int      `json:"version"`
-	Parked     []string `json:"parked"`
-	Ignored    []string `json:"ignored,omitempty"`
-	Links      []Link   `json:"links"`
-	Aliases    []Alias  `json:"aliases,omitempty"`
-	DefaultPHP string   `json:"default_php,omitempty"`
+	Version     int               `json:"version"`
+	Parked      []string          `json:"parked"`
+	ParkedRoots map[string]string `json:"parked_roots,omitempty"`
+	Ignored     []string          `json:"ignored,omitempty"`
+	Links       []Link            `json:"links"`
+	Aliases     []Alias           `json:"aliases,omitempty"`
+	DefaultPHP  string            `json:"default_php,omitempty"`
 }
 
 type Resolved struct {
@@ -150,6 +151,7 @@ func (s *State) Resolve() []Resolved {
 		if err != nil {
 			continue
 		}
+		root := s.ParkedRoots[dir]
 		for _, e := range entries {
 			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 				continue
@@ -162,7 +164,7 @@ func (s *State) Resolve() []Resolved {
 				continue
 			}
 			p := filepath.Join(dir, e.Name())
-			r := build(name, p, "", "", "", true, s.DefaultPHP)
+			r := build(name, p, root, "", "", true, s.DefaultPHP)
 			seen[r.Name] = r
 		}
 	}
@@ -331,17 +333,29 @@ func exists(p string) bool {
 
 // --- mutations -----------------------------------------------------------
 
-func AddParked(s *State, dir string) {
+func AddParked(s *State, dir string, root string) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		abs = dir
 	}
+	root = strings.TrimSpace(root)
+	if root != "" && s.ParkedRoots == nil {
+		s.ParkedRoots = map[string]string{}
+	}
 	for _, p := range s.Parked {
 		if p == abs {
+			if root == "" {
+				delete(s.ParkedRoots, abs)
+			} else {
+				s.ParkedRoots[abs] = root
+			}
 			return
 		}
 	}
 	s.Parked = append(s.Parked, abs)
+	if root != "" {
+		s.ParkedRoots[abs] = root
+	}
 }
 
 func RemoveParked(s *State, dir string) {
@@ -353,6 +367,11 @@ func RemoveParked(s *State, dir string) {
 		}
 	}
 	s.Parked = out
+	delete(s.ParkedRoots, abs)
+	delete(s.ParkedRoots, dir)
+	if len(s.ParkedRoots) == 0 {
+		s.ParkedRoots = nil
+	}
 }
 
 func AddIgnored(s *State, name string) {

@@ -10,6 +10,8 @@ priority, not commitment.
 - **`routa alias <existing> <new>`** — registers additional `.test` hostnames
   that resolve through the target site's source, proxy, PHP, root, and HTTPS
   config. `routa unalias <name>` removes them.
+- **Tracked-dir default root** — `routa track --root <path>` applies a shared
+  docroot override to every immediate child of a tracked dir.
 
 ### v1.3.0 — process-backed dev apps
 
@@ -68,7 +70,7 @@ trying to become a full-stack desktop dev suite.
     Caddy, and p11-kit trust store behavior.
 - **Config/schema stability**
   - Treat `~/.config/routa/state.json` as a stable contract.
-  - Current state files are versioned as `version: 1`; future shape changes
+  - Current state files are versioned; future shape changes
     require explicit migrations instead of silent guessing.
 - **Core routing correctness**
   - Custom roots, linked-site overrides, secure toggle rendering, and
@@ -100,8 +102,6 @@ trying to become a full-stack desktop dev suite.
 
 ## Near-term (small, well-scoped)
 
-- **Tracked-dir default root** — apply a default `--root` to every subdir of a
-  tracked dir, e.g. all subdirs are Vite apps with `dist/` outputs.
 - **Per-site env file passthrough** — let a site declare a `.env` whose vars
   routa-php-fpm exports into the worker (`env[FOO] = bar` lines in the pool
   config). Useful for sites that need different DB creds per env.
