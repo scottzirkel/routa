@@ -36,13 +36,19 @@ type Link struct {
 	Secure bool   `json:"secure"`
 }
 
-const CurrentStateVersion = 2
+type Alias struct {
+	Name   string `json:"name"`
+	Target string `json:"target"`
+}
+
+const CurrentStateVersion = 3
 
 type State struct {
 	Version    int      `json:"version"`
 	Parked     []string `json:"parked"`
 	Ignored    []string `json:"ignored,omitempty"`
 	Links      []Link   `json:"links"`
+	Aliases    []Alias  `json:"aliases,omitempty"`
 	DefaultPHP string   `json:"default_php,omitempty"`
 }
 
@@ -54,6 +60,7 @@ type Resolved struct {
 	Kind    Kind
 	PHP     string // resolved version (Link.PHP or DefaultPHP)
 	Secure  bool
+	AliasOf string
 }
 
 var siteNameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$`)
@@ -163,6 +170,7 @@ func (s *State) Resolve() []Resolved {
 		r := build(l.Name, l.Path, l.Root, l.Target, l.PHP, l.Secure, s.DefaultPHP)
 		seen[r.Name] = r
 	}
+	s.resolveAliases(seen)
 
 	out := make([]Resolved, 0, len(seen))
 	for _, r := range seen {
@@ -170,6 +178,42 @@ func (s *State) Resolve() []Resolved {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+func (s *State) resolveAliases(seen map[string]Resolved) {
+	aliases := map[string]string{}
+	for _, a := range s.Aliases {
+		if a.Name == "" || a.Target == "" {
+			continue
+		}
+		if _, exists := seen[a.Name]; exists {
+			continue
+		}
+		aliases[a.Name] = a.Target
+	}
+	var resolveOne func(name string, stack map[string]bool) (Resolved, bool)
+	resolveOne = func(name string, stack map[string]bool) (Resolved, bool) {
+		if r, ok := seen[name]; ok {
+			return r, true
+		}
+		target, ok := aliases[name]
+		if !ok || stack[name] {
+			return Resolved{}, false
+		}
+		stack[name] = true
+		r, ok := resolveOne(target, stack)
+		delete(stack, name)
+		if !ok {
+			return Resolved{}, false
+		}
+		r.Name = name
+		r.AliasOf = target
+		seen[name] = r
+		return r, true
+	}
+	for name := range aliases {
+		_, _ = resolveOne(name, map[string]bool{})
+	}
 }
 
 func (s *State) ResolvePath(path string) []Resolved {
@@ -345,6 +389,31 @@ func (s *State) Ignores(name string) bool {
 		}
 	}
 	return false
+}
+
+func AddAlias(s *State, target, name string) {
+	out := s.Aliases[:0]
+	for _, a := range s.Aliases {
+		if a.Name != name {
+			out = append(out, a)
+		}
+	}
+	s.Aliases = append(out, Alias{Name: name, Target: target})
+	sort.Slice(s.Aliases, func(i, j int) bool { return s.Aliases[i].Name < s.Aliases[j].Name })
+}
+
+func RemoveAlias(s *State, name string) bool {
+	out := s.Aliases[:0]
+	removed := false
+	for _, a := range s.Aliases {
+		if a.Name == name {
+			removed = true
+			continue
+		}
+		out = append(out, a)
+	}
+	s.Aliases = out
+	return removed
 }
 
 func AddLink(s *State, l Link) {

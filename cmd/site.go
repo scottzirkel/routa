@@ -109,6 +109,58 @@ var unlinkCmd = &cobra.Command{
 	},
 }
 
+var aliasCmd = &cobra.Command{
+	Use:   "alias <existing> <new>",
+	Short: "Register another .test name for an existing site",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(_ *cobra.Command, args []string) error {
+		target, err := normalizeSiteName(args[0])
+		if err != nil {
+			return err
+		}
+		name, err := normalizeSiteName(args[1])
+		if err != nil {
+			return err
+		}
+		if name == target {
+			return fmt.Errorf("alias name must differ from target")
+		}
+		s, err := site.Load()
+		if err != nil {
+			return err
+		}
+		resolved := s.Resolve()
+		if !resolvedHasName(resolved, target) {
+			return fmt.Errorf("no site named %s", target)
+		}
+		if resolvedHasConcreteName(s, name) {
+			return fmt.Errorf("cannot alias %s: a tracked or linked site already uses that name", name)
+		}
+		site.AddAlias(s, target, name)
+		return commitAndReload(s, fmt.Sprintf("alias %s.test → %s.test", name, target))
+	},
+}
+
+var unaliasCmd = &cobra.Command{
+	Use:   "unalias <name>",
+	Short: "Remove a site alias",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(_ *cobra.Command, args []string) error {
+		name, err := normalizeSiteName(args[0])
+		if err != nil {
+			return err
+		}
+		s, err := site.Load()
+		if err != nil {
+			return err
+		}
+		if !site.RemoveAlias(s, name) {
+			return fmt.Errorf("no alias named %s", name)
+		}
+		return commitAndReload(s, fmt.Sprintf("removed alias %s.test", name))
+	},
+}
+
 var ignoreCmd = &cobra.Command{
 	Use:   "ignore <name>",
 	Short: "Ignore an auto-discovered tracked site",
@@ -240,7 +292,7 @@ var secureCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(trackCmd, untrackCmd, linkCmd, unlinkCmd, ignoreCmd, unignoreCmd, isolateCmd, secureCmd, proxyCmd)
+	rootCmd.AddCommand(trackCmd, untrackCmd, linkCmd, unlinkCmd, aliasCmd, unaliasCmd, ignoreCmd, unignoreCmd, isolateCmd, secureCmd, proxyCmd)
 }
 
 func resolveDir(args []string) (string, error) {
@@ -256,6 +308,24 @@ func normalizeSiteName(name string) (string, error) {
 		return "", err
 	}
 	return name, nil
+}
+
+func resolvedHasName(resolved []site.Resolved, name string) bool {
+	for _, r := range resolved {
+		if r.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func resolvedHasConcreteName(s *site.State, name string) bool {
+	for _, r := range (&site.State{Parked: s.Parked, Ignored: s.Ignored, Links: s.Links, DefaultPHP: s.DefaultPHP}).Resolve() {
+		if r.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func commitAndReload(s *site.State, msg string) error {

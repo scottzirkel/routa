@@ -79,3 +79,7 @@ The initial release line was reconstructed from the first commits:
 - `v1.3.0`: generic `routa dev` command for process-backed apps, detection for package.json dev scripts, Rails, Phoenix, and Django, port discovery, and WebSocket-friendly proxy forwarding headers.
 
 ## Pending Release Notes
+
+- Add `routa alias <existing> <new>` and `routa unalias <name>` for alternate
+  `.test` hostnames that follow a target site's source, proxy, PHP, root, and
+  HTTPS config.

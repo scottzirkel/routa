@@ -84,7 +84,7 @@ routa php ini set 8.4 memory_limit 512M
 routa php ini set 8.4 upload_max_filesize 128M
 routa php ini set 8.4 post_max_size 128M
 routa php ext list 8.4
-routa track / untrack / ignore / unignore / link / unlink / isolate / secure
+routa track / untrack / ignore / unignore / link / unlink / alias / unalias / isolate / secure
 routa proxy <name> <port>       # reverse-proxy <name>.test → 127.0.0.1:<port>
 routa dev [name]                # run a detected dev server and proxy it
 routa version                   # print version, commit, build date
@@ -168,6 +168,18 @@ heuristic gets it wrong:
 cd ~/code/some-vite-app
 routa link --root dist          # serves dist/ instead of the autodetect's choice
 ```
+
+## Site aliases
+
+Use aliases when several `.test` names should serve the same site config:
+
+```bash
+routa alias app api             # api.test uses app.test's source/proxy/PHP config
+routa unalias api
+```
+
+Aliases follow the target site when its root, proxy target, PHP version, or
+HTTPS setting changes.
 
 ## Shell completion
 
@@ -259,12 +271,12 @@ prefix.
 |---|---|
 | `~/.local/share/routa/` | PHP builds, Caddyfile, site fragments, CA stash |
 | `~/.local/state/routa/` | sockets, logs, fpm runtime config |
-| `~/.config/routa/` | `state.json` (versioned tracked dirs, ignored sites, links, default PHP), PHP ini overrides |
+| `~/.config/routa/` | `state.json` (versioned tracked dirs, ignored sites, links, aliases, default PHP), PHP ini overrides |
 | `~/.config/systemd/user/routa-*.service` | `routa-dns`, `routa-caddy`, `routa-php@<spec>` |
 
 ## State file compatibility
 
-`~/.config/routa/state.json` is versioned. Current routa writes `version: 2`.
+`~/.config/routa/state.json` is versioned. Current routa writes `version: 3`.
 Pre-version state files are treated as the legacy v1 shape and migrated on the
 next save. If a future routa writes a newer state version, older binaries fail
 instead of guessing how to interpret it.

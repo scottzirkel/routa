@@ -3,10 +3,49 @@
 Tracking release status and future work. Order within sections is rough
 priority, not commitment.
 
-## 1.0.0 — stable Linux local dev server (complete)
+## Shipped
 
-Goal: make the existing Linux-focused workflow stable, recoverable, and supportable
-enough to treat the CLI and config shape as a real contract. This milestone is not
+### Pending release
+
+- **`routa alias <existing> <new>`** — registers additional `.test` hostnames
+  that resolve through the target site's source, proxy, PHP, root, and HTTPS
+  config. `routa unalias <name>` removes them.
+
+### v1.3.0 — process-backed dev apps
+
+- **`routa dev`** — starts a detected project dev server, waits for the port,
+  and registers a reverse proxy under `.test`.
+- **Dev-server detection** — supports package manager `dev` scripts, Rails,
+  Phoenix, and Django defaults.
+- **Manual process support** — accepts explicit command, name, and port options
+  for apps that do not fit a built-in detector.
+- **Proxy behavior** — reverse proxy rendering now includes WebSocket-friendly
+  forwarding headers for HMR and other upgraded connections.
+
+### v1.2.0 — routa rename and site tracking polish
+
+- **Project rename** — completed the hostr-to-routa command, path, service, and
+  documentation rename.
+- **Track/untrack language** — `routa track` and `routa untrack` are now the
+  primary commands, with `park` and `unpark` kept as Valet-compatible aliases.
+- **Ignored tracked sites** — `routa ignore` and `routa unignore` hide or
+  restore auto-discovered tracked subdirectories.
+- **Static site detection** — static `public/` directories are detected, and
+  static SPA routing falls back to `index.html`.
+
+### v1.1.0 — interactive dashboard
+
+- **Bare `routa` opens the TUI** — the dashboard is now the default entrypoint.
+- **Site inspection** — the TUI has a split inspector, health strip, live probe
+  status, and log previews.
+- **Navigation controls** — filters, sorting, collapsible subdomain groups,
+  help prompts, and selected-site actions are available inline.
+- **Compatibility** — `routa tui` remains available as a hidden alias.
+
+### v1.0.0 — stable Linux local dev server
+
+Goal: make the Linux-focused workflow stable, recoverable, and supportable enough
+to treat the CLI and config shape as a real contract. This milestone was not
 trying to become a full-stack desktop dev suite.
 
 - **Installation and rollback confidence**
@@ -35,8 +74,6 @@ trying to become a full-stack desktop dev suite.
   - Custom roots, linked-site overrides, secure toggle rendering, and
     missing-docroot status output now have focused coverage.
   - Proxy targets now validate before state is saved or Caddy fragments render.
-  - `v1.3.0` added `routa dev` for process-backed apps, with dev-server
-    detection, port discovery, and WebSocket-friendly reverse proxy headers.
   - Site detection, parked directory resolution, proxy target validation, and
     Caddy fragment rendering have focused coverage for the v1 contract.
 - **Migration reliability**
@@ -61,32 +98,44 @@ trying to become a full-stack desktop dev suite.
   - Command help covers the v1 workflows that should be usable without reading
     implementation details.
 
-## Near-term after 1.0 (small, well-scoped)
+## Near-term (small, well-scoped)
 
-- **More routing edge coverage** — keep adding unusual parked-dir, linked-site,
-  proxy, and path-combination cases as they appear.
-- **`routa alias <existing> <new>`** — register additional names that resolve to the same site (multiple `.test` hostnames → one source dir/proxy/php config).
-- **`routa park --root <path>`** — apply a default `--root` to every subdir of a parked dir (e.g. all subdirs are vite apps with `dist/` outputs).
-- **Per-site env file passthrough** — let a site declare a `.env` whose vars routa-php-fpm exports into the worker (`env[FOO] = bar` lines in the pool config). Useful for sites that need different DB creds per env.
+- **Tracked-dir default root** — apply a default `--root` to every subdir of a
+  tracked dir, e.g. all subdirs are Vite apps with `dist/` outputs.
+- **Per-site env file passthrough** — let a site declare a `.env` whose vars
+  routa-php-fpm exports into the worker (`env[FOO] = bar` lines in the pool
+  config). Useful for sites that need different DB creds per env.
+- **More routing edge coverage** — keep adding unusual tracked-dir, linked-site,
+  proxy, dev-server, and path-combination cases as they appear.
 
 ## Mid-term
 
 - **Distribution**
   - AUR package (`routa-bin`) so Arch users `paru -S routa-bin`.
 - **Bundled services**
-  - **MariaDB / Postgres** — managed user systemd unit per version, ports 3306/5432, data under `~/.local/share/routa/db/`.
+  - **MariaDB / Postgres** — managed user systemd unit per version, ports
+    3306/5432, data under `~/.local/share/routa/db/`.
   - **Redis** — single user-space instance.
-  - **Mailpit** — SMTP catcher on :1025, web UI on :8025, optionally proxied as `mail.test`.
-  - CLI shape: `routa db install mariadb 11`, `routa db start/stop/list`, `routa mail start`. TUI panel for these.
-- **PHP extension management** — currently we ship the upstream "bulk" extension set; add `routa php ext list/enable/disable <ver> <ext>` for finer control. Static-php-cli supports custom builds — could fetch alternative variants.
-- **Xdebug toggle** — install xdebug-enabled PHP variant alongside, `routa php xdebug on/off <ver>` flips the loaded ini.
+  - **Mailpit** — SMTP catcher on :1025, web UI on :8025, optionally proxied
+    as `mail.test`.
+  - CLI shape: `routa db install mariadb 11`, `routa db start/stop/list`,
+    `routa mail start`. TUI panel for these.
+- **PHP extension variants** — `routa php ext list <ver>` exists today for the
+  compiled-in upstream bulk profile. Add finer-grained variant selection or
+  custom static-php-cli builds for users who need a different extension set.
+- **Xdebug toggle** — install xdebug-enabled PHP variant alongside,
+  `routa php xdebug on/off <ver>` flips the loaded ini.
 
 ## Backlog / ideas
 
 - **More TLD support** — currently hardcoded `.test`. Allow `.localhost` or arbitrary local TLDs.
-- **Multi-host (LAN sharing)** — bind routa-caddy to LAN IP, have other devices on the network resolve `*.test` against your machine. Useful for testing on phones/tablets.
-- **Caddy admin API integration** — drive site changes via the admin API instead of file fragments + reload (faster, atomic).
-- **Plugin / driver system** — Laravel-style "drivers" for unusual project layouts so the auto-detect can be extended without touching core.
+- **Multi-host (LAN sharing)** — bind routa-caddy to LAN IP, have other
+  devices on the network resolve `*.test` against your machine. Useful for
+  testing on phones/tablets.
+- **Caddy admin API integration** — drive site changes via the admin API instead
+  of file fragments + reload (faster, atomic).
+- **Plugin / driver system** — Laravel-style "drivers" for unusual project
+  layouts so the auto-detect can be extended without touching core.
 - **Web dashboard** — small local web UI (in addition to TUI) for users who prefer a browser.
 - **macOS support** — most of the stack (Caddy, php-fpm, miekg/dns) is portable; the resolver bits are Linux-specific. Not a near-term priority.
 

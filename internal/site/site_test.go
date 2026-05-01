@@ -164,6 +164,77 @@ func TestResolveSkipsIgnoredParkedSitesButAllowsExplicitLinks(t *testing.T) {
 	}
 }
 
+func TestResolveAliasesConcreteAndProxySites(t *testing.T) {
+	root := t.TempDir()
+	parked := filepath.Join(root, "parked")
+	tracked := filepath.Join(parked, "tracked")
+	linked := filepath.Join(root, "linked", "public")
+	for _, dir := range []string{tracked, linked} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(linked, "index.php"), []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	state := &State{
+		Parked:     []string{parked},
+		DefaultPHP: "8.4",
+		Links: []Link{
+			{Name: "app", Path: filepath.Dir(linked), Root: "public", PHP: "8.3", Secure: true},
+			{Name: "vite", Target: "127.0.0.1:5173", Secure: false},
+		},
+		Aliases: []Alias{
+			{Name: "api", Target: "app"},
+			{Name: "web", Target: "tracked"},
+			{Name: "frontend", Target: "vite"},
+		},
+	}
+
+	byName := resolvedByName(state.Resolve())
+	if got := byName["api"]; got.AliasOf != "app" || got.Kind != KindPHP || got.Path != filepath.Dir(linked) || got.Docroot != linked || got.PHP != "8.3" || !got.Secure {
+		t.Fatalf("api alias = %#v", got)
+	}
+	if got := byName["web"]; got.AliasOf != "tracked" || got.Kind != KindStatic || got.Path != tracked || !got.Secure {
+		t.Fatalf("web alias = %#v", got)
+	}
+	if got := byName["frontend"]; got.AliasOf != "vite" || got.Kind != KindProxy || got.Target != "127.0.0.1:5173" || got.Secure {
+		t.Fatalf("frontend alias = %#v", got)
+	}
+}
+
+func TestResolveAliasesSkipMissingCyclesAndConcreteCollisions(t *testing.T) {
+	state := &State{
+		Links: []Link{
+			{Name: "app", Target: "127.0.0.1:8080", Secure: true},
+			{Name: "taken", Target: "127.0.0.1:9000", Secure: true},
+		},
+		Aliases: []Alias{
+			{Name: "ok", Target: "app"},
+			{Name: "missing", Target: "none"},
+			{Name: "a", Target: "b"},
+			{Name: "b", Target: "a"},
+			{Name: "taken", Target: "app"},
+		},
+	}
+
+	byName := resolvedByName(state.Resolve())
+	for _, name := range []string{"app", "taken", "ok"} {
+		if _, exists := byName[name]; !exists {
+			t.Fatalf("expected %s in resolved sites: %#v", name, byName)
+		}
+	}
+	for _, name := range []string{"missing", "a", "b"} {
+		if _, exists := byName[name]; exists {
+			t.Fatalf("did not expect %s in resolved sites: %#v", name, byName)
+		}
+	}
+	if got := byName["taken"]; got.AliasOf != "" || got.Target != "127.0.0.1:9000" {
+		t.Fatalf("concrete site should win over alias collision: %#v", got)
+	}
+}
+
 func TestIgnoredMutationsNormalizeAndSort(t *testing.T) {
 	state := &State{}
 	AddIgnored(state, "Warboard.test")
@@ -184,6 +255,29 @@ func TestIgnoredMutationsNormalizeAndSort(t *testing.T) {
 	}
 	if got := strings.Join(state.Ignored, ","); got != "newaff" {
 		t.Fatalf("ignored after removal = %#v", state.Ignored)
+	}
+}
+
+func TestAliasMutationsReplaceSortAndRemove(t *testing.T) {
+	state := &State{}
+	AddAlias(state, "app", "web")
+	AddAlias(state, "app", "api")
+	AddAlias(state, "other", "web")
+
+	if len(state.Aliases) != 2 {
+		t.Fatalf("aliases = %#v", state.Aliases)
+	}
+	if state.Aliases[0] != (Alias{Name: "api", Target: "app"}) || state.Aliases[1] != (Alias{Name: "web", Target: "other"}) {
+		t.Fatalf("aliases not sorted/replaced: %#v", state.Aliases)
+	}
+	if !RemoveAlias(state, "api") {
+		t.Fatal("expected api alias removal")
+	}
+	if RemoveAlias(state, "missing") {
+		t.Fatal("missing alias should not remove")
+	}
+	if len(state.Aliases) != 1 || state.Aliases[0].Name != "web" {
+		t.Fatalf("aliases after removal = %#v", state.Aliases)
 	}
 }
 
@@ -506,6 +600,35 @@ func TestWriteFragmentsRendersProxySite(t *testing.T) {
 	for _, unwanted := range []string{"root *", "file_server", "php_fastcgi"} {
 		if strings.Contains(content, unwanted) {
 			t.Fatalf("proxy fragment should not include %q:\n%s", unwanted, content)
+		}
+	}
+}
+
+func TestWriteFragmentsRendersAliasSiteAsSeparateHost(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	docroot := filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved := (&State{
+		Links:   []Link{{Name: "app", Path: filepath.Dir(docroot), Root: "public", Secure: true}},
+		Aliases: []Alias{{Name: "api", Target: "app"}},
+	}).Resolve()
+	if err := WriteFragments(resolved); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readFragment(t, "api")
+	for _, want := range []string{
+		"api.test {",
+		"root * " + strconv.Quote(docroot),
+		"output file " + strconv.Quote(filepath.Join(os.Getenv("XDG_STATE_HOME"), "routa", "log", "api.log")),
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("rendered alias fragment missing %q:\n%s", want, content)
 		}
 	}
 }
