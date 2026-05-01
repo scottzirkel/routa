@@ -77,14 +77,6 @@ The initial release line was reconstructed from the first commits:
 - `v1.1.0`: bare `routa` launches the interactive dashboard; the TUI gains a split inspector, health strip, log previews, filters, sorting, collapsible groups, help/prompts, and inline site actions.
 - `v1.2.0`: project rename from hostr to routa, `track`/`untrack` commands with Valet-compatible aliases, ignored tracked-site support, static `public/` detection, and static SPA fallback routing.
 - `v1.3.0`: generic `routa dev` command for process-backed apps, detection for package.json dev scripts, Rails, Phoenix, and Django, port discovery, and WebSocket-friendly proxy forwarding headers.
+- `v1.4.0`: site aliases with `routa alias`/`unalias`, tracked-dir root overrides with `routa track --root`, per-site PHP `.env` passthrough through generated PHP-FPM pools, and expanded routing edge coverage.
 
 ## Pending Release Notes
-
-- Add `routa alias <existing> <new>` and `routa unalias <name>` for alternate
-  `.test` hostnames that follow a target site's source, proxy, PHP, root, and
-  HTTPS config.
-- Add `routa track --root <path>` for tracked directories whose children all
-  share the same docroot override, such as `dist/`.
-- Add per-site PHP `.env` passthrough through generated PHP-FPM pools and
-  per-site sockets.
-- Expand routing coverage for tracked-root overrides and alias chains.

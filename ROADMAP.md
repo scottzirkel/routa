@@ -5,7 +5,7 @@ priority, not commitment.
 
 ## Shipped
 
-### Pending release
+### v1.4.0 — aliases, tracked roots, and PHP env pools
 
 - **`routa alias <existing> <new>`** — registers additional `.test` hostnames
   that resolve through the target site's source, proxy, PHP, root, and HTTPS
