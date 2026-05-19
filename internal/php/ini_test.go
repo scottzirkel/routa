@@ -121,7 +121,7 @@ func TestWriteFPMConfigWritesZendExtensionToPHPIni(t *testing.T) {
 	}
 }
 
-func TestWriteFPMConfigIncludesSiteEnvPool(t *testing.T) {
+func TestWriteFPMConfigIncludesPerSitePoolWithoutCopyingEnv(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
@@ -131,7 +131,7 @@ func TestWriteFPMConfigIncludesSiteEnvPool(t *testing.T) {
 	}
 	for path, content := range map[string]string{
 		filepath.Join(project, "public", "index.php"): "<?php",
-		filepath.Join(project, ".env"):                "APP_ENV=local\nexport DB_DATABASE='routa app'\n# ignored\n",
+		filepath.Join(project, ".env"):                "APP_ENV=local\nDB_DATABASE='routa app'\nnot shell syntax\n",
 	} {
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
@@ -157,102 +157,13 @@ func TestWriteFPMConfigIncludesSiteEnvPool(t *testing.T) {
 	for _, want := range []string{
 		"[routa-app]",
 		"listen = " + filepath.Join(os.Getenv("XDG_STATE_HOME"), "routa", "run", "php-fpm-8.4-app.sock"),
-		`env[APP_ENV] = "local"`,
-		`env[DB_DATABASE] = "routa app"`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("rendered config missing %q:\n%s", want, content)
 		}
 	}
-}
-
-func TestWriteFPMConfigQuotesEnvValues(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-
-	project := filepath.Join(t.TempDir(), "app")
-	if err := os.MkdirAll(filepath.Join(project, "public"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for path, content := range map[string]string{
-		filepath.Join(project, "public", "index.php"): "<?php",
-		filepath.Join(project, ".env"):                `APP_KEY=base64:abc=` + "\n" + `APP_NAME="Routa \"Local\""` + "\nMAIL_FROM_NAME=${APP_NAME}\nEMPTY_VALUE=\n",
-	} {
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := site.Save(&site.State{
-		DefaultPHP: "8.4",
-		Links:      []site.Link{{Name: "app", Path: project, Root: "public", Secure: true}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := WriteFPMConfig("8.4"); err != nil {
-		t.Fatal(err)
-	}
-
-	path := filepath.Join(os.Getenv("XDG_STATE_HOME"), "routa", "run", "php-fpm-8.4.conf")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	content := string(data)
-	for _, want := range []string{
-		`env[APP_KEY] = "base64:abc="`,
-		`env[APP_NAME] = "Routa \\\"Local\\\""`,
-		`env[MAIL_FROM_NAME] = "Routa \\\"Local\\\""`,
-	} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("rendered config missing %q:\n%s", want, content)
-		}
-	}
-	if strings.Contains(content, "env[EMPTY_VALUE]") {
-		t.Fatalf("rendered config should omit empty env values:\n%s", content)
-	}
-}
-
-func TestLoadEnvFileParsesAndSortsSettings(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(path, []byte("B=two\nexport A=\"one\"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	env, err := LoadEnvFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []EnvSetting{{Key: "A", Value: "one"}, {Key: "B", Value: "two"}}
-	if len(env) != len(want) {
-		t.Fatalf("env = %#v", env)
-	}
-	for i := range want {
-		if env[i] != want[i] {
-			t.Fatalf("env[%d] = %#v, want %#v", i, env[i], want[i])
-		}
-	}
-}
-
-func TestLoadEnvFileExpandsReferences(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".env")
-	if err := os.WriteFile(path, []byte("FORWARD_REDIS_PORT=6380\nREDIS_PORT=\"${FORWARD_REDIS_PORT}\"\nUNKNOWN=${NOT_DEFINED}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	env, err := LoadEnvFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := map[string]string{}
-	for _, setting := range env {
-		got[setting.Key] = setting.Value
-	}
-	if got["REDIS_PORT"] != "6380" {
-		t.Fatalf("REDIS_PORT = %q, want 6380", got["REDIS_PORT"])
-	}
-	if got["UNKNOWN"] != "${NOT_DEFINED}" {
-		t.Fatalf("UNKNOWN = %q, want preserved reference", got["UNKNOWN"])
+	if strings.Contains(content, "env[") {
+		t.Fatalf("rendered config should not copy project .env values:\n%s", content)
 	}
 }
 

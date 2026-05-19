@@ -5,7 +5,17 @@ priority, not commitment.
 
 ## Pending release
 
-- None.
+- **Wildcard subdomains** — site fragments include wildcard hosts such as
+  `*.app.test`, while explicit subdomain links and aliases keep their own exact
+  host fragments.
+- **Stable PHP env behavior** — PHP sites use per-site FPM sockets without
+  copying project `.env` values into generated FPM config.
+- **Valet-compatible drivers** — project-local `LocalValetDriver.php` and
+  global `*ValetDriver.php` files can serve unusual PHP layouts through Valet's
+  `serves`, `isStaticFile`, and `frontControllerPath` method contract.
+- **Site-specific server variables** — `.routa-env.php` injects request-time
+  `$_SERVER` values using Valet's site-name and `*` map convention, with
+  `.valet-env.php` supported as a migration fallback.
 
 ## Released
 
@@ -209,40 +219,56 @@ trying to become a full-stack desktop dev suite.
   - Command help covers the v1 workflows that should be usable without reading
     implementation details.
 
-## Near-term (small, well-scoped)
+## Future Work Triage
 
+### P0 — release and packaging
+
+- **Release pending work** — cut the next release so wildcard subdomains,
+  stable PHP env behavior, Linux release artifacts, and matching PHP Xdebug
+  artifacts are attached.
+- **AUR package publication** — publish and maintain `routa-bin` after release
+  artifacts exist, then keep package metadata aligned with the release process.
+
+### P2 — local workflow polish
+
+- **FrankenPHP runtime option** — investigate FrankenPHP as a viable alternative
+  or optional runtime alongside PHP-FPM. Evaluate compatibility with Routa's
+  Caddy-based routing, per-site PHP versions, `.routa-env.php` server-variable
+  injection, Valet-compatible drivers, Xdebug expectations, and static PHP
+  distribution model before deciding whether to prototype.
+- **Directory listing toggle** — expose a site/global setting for directory
+  listing behavior, defaulting to off.
 - **More routing edge coverage** — keep adding unusual tracked-dir, linked-site,
-  proxy, dev-server, and path-combination cases as they appear.
+  proxy, dev-server, wildcard-host, and path-combination cases as they appear.
+- **More TLD support** — `.test` is currently hardcoded. Allow `.localhost` or
+  an arbitrary local TLD without weakening the Linux resolver assumptions.
+- **Multi-host LAN sharing** — optionally bind `routa-caddy` to a LAN address
+  and document how other devices can resolve local sites against the dev
+  machine. Useful for phone/tablet testing.
 
-## Mid-term
+### P3 — extensibility and larger UX work
 
-- **Distribution**
-  - Publish and maintain the AUR package (`routa-bin`) after the first binary
-    release artifacts are attached.
 - **PHP extension variants** — `routa php ext list <ver>` exists today for the
   compiled-in upstream bulk profile. Add finer-grained variant selection or
   custom static-php-cli builds for users who need a different extension set.
-
-## Next logical steps
-
-1. **Release pending work** — cut the next release so GitHub artifacts and
-   matching PHP Xdebug artifacts are attached, then update/publish the AUR
-   package from those release artifacts.
-
-## Backlog / ideas
-
-- **More TLD support** — currently hardcoded `.test`. Allow `.localhost` or arbitrary local TLDs.
-- **Multi-host (LAN sharing)** — bind routa-caddy to LAN IP, have other
-  devices on the network resolve `*.test` against your machine. Useful for
-  testing on phones/tablets.
 - **Caddy admin API integration** — drive site changes via the admin API instead
-  of file fragments + reload (faster, atomic).
-- **Plugin / driver system** — Laravel-style "drivers" for unusual project
-  layouts so the auto-detect can be extended without touching core.
-- **Web dashboard** — small local web UI (in addition to TUI) for users who prefer a browser.
-- **macOS support** — most of the stack (Caddy, php-fpm, miekg/dns) is portable; the resolver bits are Linux-specific. Not a near-term priority.
+  of file fragments plus reloads for faster, more atomic updates.
+- **Web dashboard** — add a small local web UI in addition to the TUI for users
+  who prefer browser-based inspection and actions.
 
-## Won't do
+### Not planned
 
+- **Nginx config compatibility** — Routa should not try to execute or translate
+  arbitrary Valet/Herd Nginx snippets. A migration diagnostic can point out
+  unsupported custom Nginx config, but Caddy remains the routing layer.
+- **Herd manifest compatibility** — `herd.yml`, Forge integration, Expose
+  sharing, and Herd Pro service workflows are Herd-specific product surfaces,
+  not Routa compatibility targets.
+- **Node version management** — Herd's `isolate-node`/NVM behavior is outside
+  Routa's current site-serving scope. Dev-server proxying remains the supported
+  Node workflow.
+- **macOS support** — most of the stack is portable, but Routa's resolver,
+  systemd user service, and trust-store flows are Linux-specific.
 - **GUI app** — explicit project rejection from day one.
-- **Auto-updating the binary in place** — leave to OS package managers (AUR, brew, deb, rpm) and `git pull && bash install.sh`.
+- **Auto-updating the binary in place** — leave to OS package managers
+  (`routa-bin`, future packages) and `git pull && bash install.sh`.

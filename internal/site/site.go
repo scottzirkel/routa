@@ -54,15 +54,17 @@ type State struct {
 }
 
 type Resolved struct {
-	Name    string
-	Path    string
-	Docroot string
-	Target  string // for proxy
-	Kind    Kind
-	PHP     string // resolved version (Link.PHP or DefaultPHP)
-	Secure  bool
-	AliasOf string
-	EnvFile string
+	Name          string
+	Path          string
+	Docroot       string
+	Target        string // for proxy
+	Kind          Kind
+	PHP           string // resolved version (Link.PHP or DefaultPHP)
+	Secure        bool
+	AliasOf       string
+	EnvFile       string
+	Driver        string
+	ServerEnvFile string
 }
 
 var siteNameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$`)
@@ -268,6 +270,7 @@ func build(name, path, root, target, php string, secure bool, defaultPHP string)
 	}
 	var kind Kind
 	var docroot string
+	var driver string
 	if root != "" {
 		docroot = root
 		if !filepath.IsAbs(docroot) {
@@ -282,6 +285,13 @@ func build(name, path, root, target, php string, secure bool, defaultPHP string)
 		}
 	} else {
 		kind, docroot = detect(path)
+		if hasLocalValetDriver(path) {
+			kind = KindPHP
+			docroot = path
+			driver = "valet"
+		} else if kind == KindPHP && hasGlobalValetDrivers() {
+			driver = "valet"
+		}
 	}
 	resolvedPHP := php
 	if resolvedPHP == "" && kind == KindPHP {
@@ -291,14 +301,20 @@ func build(name, path, root, target, php string, secure bool, defaultPHP string)
 	if kind == KindPHP && exists(filepath.Join(path, ".env")) {
 		envFile = filepath.Join(path, ".env")
 	}
+	serverEnvFile := ""
+	if kind == KindPHP {
+		serverEnvFile = serverEnvFileForPath(path)
+	}
 	return Resolved{
-		Name:    name,
-		Path:    path,
-		Docroot: docroot,
-		Kind:    kind,
-		PHP:     resolvedPHP,
-		Secure:  secure,
-		EnvFile: envFile,
+		Name:          name,
+		Path:          path,
+		Docroot:       docroot,
+		Kind:          kind,
+		PHP:           resolvedPHP,
+		Secure:        secure,
+		EnvFile:       envFile,
+		Driver:        driver,
+		ServerEnvFile: serverEnvFile,
 	}
 }
 
@@ -334,6 +350,48 @@ func detect(path string) (Kind, string) {
 func exists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+func hasLocalValetDriver(path string) bool {
+	return exists(filepath.Join(path, "LocalValetDriver.php"))
+}
+
+func serverEnvFileForPath(path string) string {
+	native := filepath.Join(path, ".routa-env.php")
+	if exists(native) {
+		return native
+	}
+	legacy := filepath.Join(path, ".valet-env.php")
+	if exists(legacy) {
+		return legacy
+	}
+	return ""
+}
+
+func hasGlobalValetDrivers() bool {
+	for _, dir := range valetDriverDirs() {
+		matches, err := filepath.Glob(filepath.Join(dir, "*ValetDriver.php"))
+		if err != nil {
+			continue
+		}
+		for _, match := range matches {
+			if filepath.Base(match) != "LocalValetDriver.php" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func valetDriverDirs() []string {
+	dirs := []string{paths.DriversDir()}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		legacy := filepath.Join(home, ".config", "valet", "Drivers")
+		if legacy != paths.DriversDir() {
+			dirs = append(dirs, legacy)
+		}
+	}
+	return dirs
 }
 
 // --- mutations -----------------------------------------------------------
@@ -484,18 +542,40 @@ const fragmentTmpl = `{{.SiteAddress}} {
 		header_up X-Forwarded-Proto {scheme}
 	}
 {{- else}}
+{{- if not .UsesValetDriver}}
 	root * {{.DocrootCaddy}}
 	encode zstd gzip
+{{- end}}
 {{- if eq (printf "%s" .Kind) "php"}}
 {{- if .PHP}}
-	php_fastcgi {{.SockPathCaddy}}
+{{- if .UsesValetDriver}}
+	root * {{.RouterRootCaddy}}
+	php_fastcgi {{.SockPathCaddy}} {
+		root {{.RouterRootCaddy}}
+		env ROUTA_SITE_PATH {{.PathCaddy}}
+		env ROUTA_SITE_NAME {{.NameCaddy}}
+		env ROUTA_DOCROOT {{.DocrootCaddy}}
+		env ROUTA_VALET_DRIVER_DIRS {{.DriverDirsCaddy}}
+		env PHP_VALUE {{.PHPValueCaddy}}
+		try_files /{{.RouterFile}}
+	}
+{{- else}}
+	php_fastcgi {{.SockPathCaddy}} {
+		env ROUTA_SITE_PATH {{.PathCaddy}}
+		env ROUTA_SITE_NAME {{.NameCaddy}}
+		env ROUTA_DOCROOT {{.DocrootCaddy}}
+		env PHP_VALUE {{.PHPValueCaddy}}
+	}
+{{- end}}
 {{- else}}
 	respond "routa: {{.Name}} is a PHP site but no PHP version is installed. Run 'routa php install <ver>'." 503
 {{- end}}
 {{- else}}
 	try_files {path} {path}/ /index.html
 {{- end}}
+{{- if not .UsesValetDriver}}
 	file_server
+{{- end}}
 {{- end}}
 	log {
 		output file {{.LogFileCaddy}} {
@@ -509,11 +589,18 @@ const fragmentTmpl = `{{.SiteAddress}} {
 
 type fragData struct {
 	Resolved
-	SiteAddress   string
-	TargetCaddy   string
-	DocrootCaddy  string
-	SockPathCaddy string
-	LogFileCaddy  string
+	SiteAddress     string
+	TargetCaddy     string
+	DocrootCaddy    string
+	SockPathCaddy   string
+	LogFileCaddy    string
+	PathCaddy       string
+	NameCaddy       string
+	RouterRootCaddy string
+	DriverDirsCaddy string
+	PHPValueCaddy   string
+	RouterFile      string
+	UsesValetDriver bool
 }
 
 func WriteFragments(sites []Resolved) error {
@@ -530,6 +617,16 @@ func WriteFragments(sites []Resolved) error {
 	if err := os.MkdirAll(paths.SitesDir(), 0o755); err != nil {
 		return err
 	}
+	if usesPHP(sites) {
+		if err := writeServerEnvPrepender(); err != nil {
+			return err
+		}
+	}
+	if usesValetDriver(sites) {
+		if err := writeValetRouter(); err != nil {
+			return err
+		}
+	}
 	// Wipe stale fragments.
 	old, _ := filepath.Glob(filepath.Join(paths.SitesDir(), "*.caddy"))
 	keep := map[string]bool{}
@@ -545,12 +642,19 @@ func WriteFragments(sites []Resolved) error {
 	t := template.Must(template.New("frag").Parse(fragmentTmpl))
 	for _, s := range sites {
 		data := fragData{
-			Resolved:      s,
-			SiteAddress:   siteAddress(s),
-			TargetCaddy:   caddyQuote(s.Target),
-			DocrootCaddy:  caddyQuote(s.Docroot),
-			SockPathCaddy: caddyQuote("unix/" + FPMSocketPath(s)),
-			LogFileCaddy:  caddyQuote(filepath.Join(paths.LogDir(), s.Name+".log")),
+			Resolved:        s,
+			SiteAddress:     siteAddress(s),
+			TargetCaddy:     caddyQuote(s.Target),
+			DocrootCaddy:    caddyQuote(s.Docroot),
+			SockPathCaddy:   caddyQuote("unix/" + FPMSocketPath(s)),
+			LogFileCaddy:    caddyQuote(filepath.Join(paths.LogDir(), s.Name+".log")),
+			PathCaddy:       caddyQuote(s.Path),
+			NameCaddy:       caddyQuote(s.Name),
+			RouterRootCaddy: caddyQuote(paths.DataDir()),
+			DriverDirsCaddy: caddyQuote(strings.Join(valetDriverDirs(), string(os.PathListSeparator))),
+			PHPValueCaddy:   caddyQuote("auto_prepend_file=" + serverEnvPrependerPath()),
+			RouterFile:      valetRouterFileName,
+			UsesValetDriver: s.Driver == "valet",
 		}
 		f, err := os.Create(filepath.Join(paths.SitesDir(), fragName(s.Name)))
 		if err != nil {
@@ -565,17 +669,35 @@ func WriteFragments(sites []Resolved) error {
 	return nil
 }
 
+func usesPHP(sites []Resolved) bool {
+	for _, s := range sites {
+		if s.Kind == KindPHP && s.PHP != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func usesValetDriver(sites []Resolved) bool {
+	for _, s := range sites {
+		if s.Driver == "valet" {
+			return true
+		}
+	}
+	return false
+}
+
 func fragName(siteName string) string { return siteName + ".caddy" }
 
 func siteAddress(s Resolved) string {
 	if s.Secure {
-		return s.Name + ".test"
+		return s.Name + ".test, *." + s.Name + ".test"
 	}
-	return "http://" + s.Name + ".test"
+	return "http://" + s.Name + ".test, http://*." + s.Name + ".test"
 }
 
 func FPMSocketPath(s Resolved) string {
-	if s.EnvFile != "" {
+	if s.Kind == KindPHP {
 		return filepath.Join(paths.RunDir(), fmt.Sprintf("php-fpm-%s-%s.sock", s.PHP, s.Name))
 	}
 	return filepath.Join(paths.RunDir(), fmt.Sprintf("php-fpm-%s.sock", s.PHP))

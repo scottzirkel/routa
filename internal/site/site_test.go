@@ -503,6 +503,109 @@ func TestResolveCustomRootRoutingBehavior(t *testing.T) {
 	}
 }
 
+func TestResolveLocalValetDriverMarksSiteAsPHP(t *testing.T) {
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "LocalValetDriver.php"), []byte("<?php"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved := (&State{
+		DefaultPHP: "8.4",
+		Links:      []Link{{Name: "app", Path: project, Secure: true}},
+	}).Resolve()
+
+	if len(resolved) != 1 {
+		t.Fatalf("resolved = %#v", resolved)
+	}
+	if got := resolved[0]; got.Kind != KindPHP || got.Docroot != project || got.PHP != "8.4" || got.Driver != "valet" {
+		t.Fatalf("local Valet driver site = %#v", got)
+	}
+}
+
+func TestResolveGlobalValetDriverAppliesToPHPDetectedSites(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	driversDir := filepath.Join(configHome, "routa", "Drivers")
+	if err := os.MkdirAll(driversDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(driversDir, "WordPressValetDriver.php"), []byte("<?php"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "index.php"), []byte("<?php"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved := (&State{
+		DefaultPHP: "8.4",
+		Links:      []Link{{Name: "app", Path: project, Secure: true}},
+	}).Resolve()
+
+	if len(resolved) != 1 {
+		t.Fatalf("resolved = %#v", resolved)
+	}
+	if got := resolved[0]; got.Kind != KindPHP || got.Driver != "valet" {
+		t.Fatalf("global Valet driver PHP site = %#v", got)
+	}
+}
+
+func TestResolveServerEnvFilePrefersRoutaEnvOverValetEnv(t *testing.T) {
+	project := t.TempDir()
+	for _, path := range []string{
+		filepath.Join(project, "public", "index.php"),
+		filepath.Join(project, ".routa-env.php"),
+		filepath.Join(project, ".valet-env.php"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("<?php return [];"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	resolved := (&State{
+		DefaultPHP: "8.4",
+		Links:      []Link{{Name: "app", Path: project, Secure: true}},
+	}).Resolve()
+
+	if len(resolved) != 1 {
+		t.Fatalf("resolved = %#v", resolved)
+	}
+	if got, want := resolved[0].ServerEnvFile, filepath.Join(project, ".routa-env.php"); got != want {
+		t.Fatalf("server env file = %q, want %q", got, want)
+	}
+}
+
+func TestResolveServerEnvFileFallsBackToValetEnv(t *testing.T) {
+	project := t.TempDir()
+	for _, path := range []string{
+		filepath.Join(project, "public", "index.php"),
+		filepath.Join(project, ".valet-env.php"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("<?php return [];"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	resolved := (&State{
+		DefaultPHP: "8.4",
+		Links:      []Link{{Name: "app", Path: project, Secure: true}},
+	}).Resolve()
+
+	if len(resolved) != 1 {
+		t.Fatalf("resolved = %#v", resolved)
+	}
+	if got, want := resolved[0].ServerEnvFile, filepath.Join(project, ".valet-env.php"); got != want {
+		t.Fatalf("server env file = %q, want %q", got, want)
+	}
+}
+
 func TestResolveNestedRootOverridesForLinksAndParkedDirs(t *testing.T) {
 	root := t.TempDir()
 	parked := filepath.Join(root, "parked")
@@ -805,7 +908,7 @@ func TestWriteFragmentsQuotesPathsAndUsesHTTPForInsecureSites(t *testing.T) {
 	}
 	content := string(data)
 	for _, want := range []string{
-		"http://foo.test {",
+		"http://foo.test, http://*.foo.test {",
 		"root * " + strconv.Quote(docroot),
 		"try_files {path} {path}/ /index.html",
 		"output file " + strconv.Quote(filepath.Join(os.Getenv("XDG_STATE_HOME"), "routa", "log", "foo.log")),
@@ -829,12 +932,12 @@ func TestWriteFragmentsSecureToggleForStaticSites(t *testing.T) {
 		{
 			name:   "secure",
 			secure: true,
-			want:   []string{"app.test {", "issuer internal {", "lifetime 396d"},
+			want:   []string{"app.test, *.app.test {", "issuer internal {", "lifetime 396d"},
 		},
 		{
 			name:       "insecure",
 			secure:     false,
-			want:       []string{"http://app.test {", "# secure=false: HTTP only"},
+			want:       []string{"http://app.test, http://*.app.test {", "# secure=false: HTTP only"},
 			wantAbsent: []string{"issuer internal", "lifetime 396d"},
 		},
 	}
@@ -889,11 +992,12 @@ func TestWriteFragmentsRendersPHPSiteWithSocket(t *testing.T) {
 
 	content := readFragment(t, "app")
 	for _, want := range []string{
-		"app.test {",
+		"app.test, *.app.test {",
 		"issuer internal {",
 		"lifetime 396d",
 		"root * " + strconv.Quote(docroot),
-		"php_fastcgi " + strconv.Quote("unix/"+filepath.Join(os.Getenv("XDG_STATE_HOME"), "routa", "run", "php-fpm-8.4.sock")),
+		"php_fastcgi " + strconv.Quote("unix/"+filepath.Join(os.Getenv("XDG_STATE_HOME"), "routa", "run", "php-fpm-8.4-app.sock")) + " {",
+		"env PHP_VALUE " + strconv.Quote("auto_prepend_file="+filepath.Join(os.Getenv("XDG_DATA_HOME"), "routa", "routa-server-env.php")),
 		"file_server",
 	} {
 		if !strings.Contains(content, want) {
@@ -903,9 +1007,19 @@ func TestWriteFragmentsRendersPHPSiteWithSocket(t *testing.T) {
 	if strings.Contains(content, "try_files {path} {path}/ /index.html") {
 		t.Fatalf("PHP fragment should leave routing to php_fastcgi:\n%s", content)
 	}
+
+	prepender, err := os.ReadFile(filepath.Join(os.Getenv("XDG_DATA_HOME"), "routa", "routa-server-env.php"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{".routa-env.php", ".valet-env.php", "$_SERVER", "ROUTA_SITE_NAME"} {
+		if !strings.Contains(string(prepender), want) {
+			t.Fatalf("server env prepender missing %q:\n%s", want, prepender)
+		}
+	}
 }
 
-func TestWriteFragmentsRendersPHPSiteWithEnvSocket(t *testing.T) {
+func TestWriteFragmentsRendersPHPSiteWithSameSocketWhenEnvExists(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
@@ -933,6 +1047,62 @@ func TestWriteFragmentsRendersPHPSiteWithEnvSocket(t *testing.T) {
 	want := "php_fastcgi " + strconv.Quote("unix/"+filepath.Join(os.Getenv("XDG_STATE_HOME"), "routa", "run", "php-fpm-8.4-app.sock"))
 	if !strings.Contains(content, want) {
 		t.Fatalf("rendered fragment missing %q:\n%s", want, content)
+	}
+}
+
+func TestWriteFragmentsRendersValetDriverRouter(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+
+	project := t.TempDir()
+	docroot := filepath.Join(project, "public")
+	if err := os.MkdirAll(docroot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := WriteFragments([]Resolved{{
+		Name:    "app",
+		Path:    project,
+		Docroot: docroot,
+		Kind:    KindPHP,
+		PHP:     "8.4",
+		Secure:  true,
+		Driver:  "valet",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	content := readFragment(t, "app")
+	for _, want := range []string{
+		"root * " + strconv.Quote(filepath.Join(os.Getenv("XDG_DATA_HOME"), "routa")),
+		"php_fastcgi " + strconv.Quote("unix/"+filepath.Join(os.Getenv("XDG_STATE_HOME"), "routa", "run", "php-fpm-8.4-app.sock")) + " {",
+		"env ROUTA_SITE_PATH " + strconv.Quote(project),
+		"env ROUTA_SITE_NAME " + strconv.Quote("app"),
+		"env ROUTA_DOCROOT " + strconv.Quote(docroot),
+		"env ROUTA_VALET_DRIVER_DIRS " + strconv.Quote(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "routa", "Drivers")+string(os.PathListSeparator)+filepath.Join(os.Getenv("HOME"), ".config", "valet", "Drivers")),
+		"env PHP_VALUE " + strconv.Quote("auto_prepend_file="+filepath.Join(os.Getenv("XDG_DATA_HOME"), "routa", "routa-server-env.php")),
+		"try_files /routa-valet-router.php",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("rendered Valet driver fragment missing %q:\n%s", want, content)
+		}
+	}
+	for _, unwanted := range []string{"file_server", "root * " + strconv.Quote(docroot)} {
+		if strings.Contains(content, unwanted) {
+			t.Fatalf("Valet driver fragment should not include %q:\n%s", unwanted, content)
+		}
+	}
+
+	router, err := os.ReadFile(filepath.Join(os.Getenv("XDG_DATA_HOME"), "routa", "routa-valet-router.php"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"LocalValetDriver.php", "*ValetDriver.php", "serves(", "isStaticFile(", "frontControllerPath("} {
+		if !strings.Contains(string(router), want) {
+			t.Fatalf("Valet router missing %q:\n%s", want, router)
+		}
 	}
 }
 
@@ -978,7 +1148,7 @@ func TestWriteFragmentsRendersProxySite(t *testing.T) {
 
 	content := readFragment(t, "vite")
 	for _, want := range []string{
-		"vite.test {",
+		"vite.test, *.vite.test {",
 		"issuer internal {",
 		"lifetime 396d",
 		"reverse_proxy " + strconv.Quote("127.0.0.1:5173"),
@@ -994,6 +1164,37 @@ func TestWriteFragmentsRendersProxySite(t *testing.T) {
 		if strings.Contains(content, unwanted) {
 			t.Fatalf("proxy fragment should not include %q:\n%s", unwanted, content)
 		}
+	}
+}
+
+func TestWriteFragmentsRendersWildcardHostsWithExplicitSubdomain(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	if err := WriteFragments([]Resolved{
+		{
+			Name:    "app",
+			Docroot: t.TempDir(),
+			Kind:    KindStatic,
+			Secure:  true,
+		},
+		{
+			Name:    "api.app",
+			Docroot: t.TempDir(),
+			Kind:    KindStatic,
+			Secure:  true,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	app := readFragment(t, "app")
+	if !strings.Contains(app, "app.test, *.app.test {") {
+		t.Fatalf("app fragment missing wildcard host:\n%s", app)
+	}
+	api := readFragment(t, "api.app")
+	if !strings.Contains(api, "api.app.test, *.api.app.test {") {
+		t.Fatalf("explicit subdomain fragment missing exact host:\n%s", api)
 	}
 }
 
@@ -1016,7 +1217,7 @@ func TestWriteFragmentsRendersAliasSiteAsSeparateHost(t *testing.T) {
 
 	content := readFragment(t, "api")
 	for _, want := range []string{
-		"api.test {",
+		"api.test, *.api.test {",
 		"root * " + strconv.Quote(docroot),
 		"output file " + strconv.Quote(filepath.Join(os.Getenv("XDG_STATE_HOME"), "routa", "log", "api.log")),
 	} {
@@ -1048,7 +1249,7 @@ func TestWriteFragmentsRendersAliasChainAsSeparateHosts(t *testing.T) {
 
 	content := readFragment(t, "v1")
 	for _, want := range []string{
-		"v1.test {",
+		"v1.test, *.v1.test {",
 		"root * " + strconv.Quote(docroot),
 		"output file " + strconv.Quote(filepath.Join(os.Getenv("XDG_STATE_HOME"), "routa", "log", "v1.log")),
 	} {
@@ -1058,7 +1259,7 @@ func TestWriteFragmentsRendersAliasChainAsSeparateHosts(t *testing.T) {
 	}
 }
 
-func TestWriteFragmentsRendersAliasWithDistinctEnvSocket(t *testing.T) {
+func TestWriteFragmentsRendersAliasWithDistinctPHPSocket(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
@@ -1067,13 +1268,8 @@ func TestWriteFragmentsRendersAliasWithDistinctEnvSocket(t *testing.T) {
 	if err := os.MkdirAll(docroot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range []string{
-		filepath.Join(project, ".env"),
-		filepath.Join(docroot, "index.php"),
-	} {
-		if err := os.WriteFile(file, []byte("ok"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(docroot, "index.php"), []byte("<?php"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	resolved := (&State{
@@ -1106,7 +1302,7 @@ func TestWriteFragmentsRendersProxyAlias(t *testing.T) {
 
 	content := readFragment(t, "frontend")
 	for _, want := range []string{
-		"frontend.test {",
+		"frontend.test, *.frontend.test {",
 		"issuer internal {",
 		"lifetime 396d",
 		"reverse_proxy " + strconv.Quote("127.0.0.1:5173"),

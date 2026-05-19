@@ -27,6 +27,9 @@ func PHPConfigDir() string {
 }
 func CADir() string    { return filepath.Join(DataDir(), "ca") }
 func SitesDir() string { return filepath.Join(DataDir(), "sites") }
+func DriversDir() string {
+	return filepath.Join(ConfigDir(), "Drivers")
+}
 
 func SystemdUserDir() string {
 	return filepath.Join(xdg("XDG_CONFIG_HOME", ".config"), "systemd", "user")

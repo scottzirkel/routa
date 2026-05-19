@@ -64,7 +64,7 @@ line to add to your shell rc.
 routa init                      # diagnose host resolver and required binaries
 routa install                   # provision services on alt ports (DNS :1053, :8080/:8443)
 routa php install 8.4           # fetch a static PHP build
-routa track ~/code              # any subdir of ~/code becomes <subdir>.test
+routa track ~/code              # any subdir becomes <subdir>.test and *.<subdir>.test
 routa track ~/apps --root dist  # every child serves its own dist/ dir
 routa link                      # link the current dir as <basename>.test
 
@@ -176,18 +176,39 @@ arguments stay unambiguous.
 
 ## Per-site environment
 
-For PHP sites, routa reads a project-level `.env` file and renders those values
-into a per-site PHP-FPM pool:
+For PHP sites, routa keeps each site on its own PHP-FPM socket:
 
 ```bash
 APP_ENV=local
 DB_DATABASE=my_app
 ```
 
-When a PHP site has a `.env`, routa gives that site its own PHP-FPM socket so
-the values do not leak into other sites using the same PHP version. Run
-`routa reload` after editing `.env` so routa can regenerate and reload the
-matching PHP-FPM config.
+Routa does not copy project `.env` values into PHP-FPM config. Your framework
+or application reads its own `.env`, so editing values such as `DB_DATABASE`
+does not require `routa reload`.
+
+For frameworks that need explicit server variables, add `.routa-env.php` to
+the project root:
+
+```php
+<?php
+
+return [
+    '*' => [
+        'WEBSITE_NAME' => 'Local',
+    ],
+
+    'app' => [
+        'APP_CONTEXT' => 'primary',
+    ],
+];
+```
+
+Routa reads this file on each PHP request and copies matching entries into
+`$_SERVER`. The `*` entry applies to every site served from the project, and
+the site-name entry, such as `app` for `app.test`, overrides or extends it.
+For Valet migration compatibility, `.valet-env.php` uses the same format when
+`.routa-env.php` is absent.
 
 ## PHP extensions
 
@@ -245,6 +266,10 @@ child:
 routa track ~/apps --root dist  # app.test serves ~/apps/app/dist
 ```
 
+Routa serves wildcard subdomains for each site. If `app.test` exists,
+`api.app.test` and any other `*.app.test` host route to the same site unless
+that subdomain is explicitly linked or aliased.
+
 ## Site aliases
 
 Use aliases when several `.test` names should serve the same site config:
@@ -256,6 +281,25 @@ routa unalias api
 
 Aliases follow the target site when its root, proxy target, PHP version, or
 HTTPS setting changes.
+
+## Valet-compatible drivers
+
+Routa supports Valet-style PHP drivers for unusual project layouts. Put a
+project-specific `LocalValetDriver.php` in the project root, or global drivers
+named `*ValetDriver.php` in `~/.config/routa/Drivers/`. During migration,
+Routa also checks Valet's `~/.config/valet/Drivers/` directory.
+
+Drivers use Valet's method contract:
+
+```php
+serves($sitePath, $siteName, $uri)
+isStaticFile($sitePath, $siteName, $uri)
+frontControllerPath($sitePath, $siteName, $uri)
+```
+
+`LocalValetDriver.php` can make a project a PHP site even without a detected
+`index.php`. Global drivers are used for sites Routa already detects as PHP.
+Routa's built-in detector remains the fallback behavior.
 
 ## Shell completion
 

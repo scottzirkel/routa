@@ -100,4 +100,7 @@ The initial release line was reconstructed from the first commits:
 
 ### Next
 
-- None.
+- PHP sites use stable per-site FPM sockets without copying project `.env` values into generated FPM config, so editing `.env` values no longer requires `routa reload`.
+- Site fragments now include wildcard subdomain hosts like `*.app.test`, while explicit subdomain links and aliases continue to render their own exact host fragments.
+- Valet-compatible PHP drivers are supported via project-local `LocalValetDriver.php`, global `*ValetDriver.php` files in `~/.config/routa/Drivers/`, and the Valet `serves` / `isStaticFile` / `frontControllerPath` method contract.
+- PHP sites can inject request-time `$_SERVER` values from `.routa-env.php`, with `.valet-env.php` supported as a Valet-compatible fallback.

@@ -164,18 +164,20 @@ func phpSpecFromUnit(unit string) (string, bool) {
 var statusJSON bool
 
 type statusSite struct {
-	Name       string    `json:"name"`
-	URL        string    `json:"url"`
-	Source     string    `json:"source"`
-	Kind       site.Kind `json:"kind"`
-	PHP        string    `json:"php"`
-	PHPMissing bool      `json:"php_missing"`
-	Secure     bool      `json:"secure"`
-	Path       string    `json:"path"`
-	Docroot    string    `json:"docroot"`
-	Target     string    `json:"target"`
-	AliasOf    string    `json:"alias_of"`
-	EnvFile    string    `json:"env_file,omitempty"`
+	Name          string    `json:"name"`
+	URL           string    `json:"url"`
+	Source        string    `json:"source"`
+	Kind          site.Kind `json:"kind"`
+	PHP           string    `json:"php"`
+	PHPMissing    bool      `json:"php_missing"`
+	Secure        bool      `json:"secure"`
+	Path          string    `json:"path"`
+	Docroot       string    `json:"docroot"`
+	Target        string    `json:"target"`
+	AliasOf       string    `json:"alias_of"`
+	EnvFile       string    `json:"env_file,omitempty"`
+	Driver        string    `json:"driver,omitempty"`
+	ServerEnvFile string    `json:"server_env_file,omitempty"`
 }
 
 var statusCmd = &cobra.Command{
@@ -228,18 +230,20 @@ func renderStatusJSON(cmd *cobra.Command, s *site.State, sites []site.Resolved, 
 	out := make([]statusSite, 0, len(sites))
 	for _, r := range sites {
 		out = append(out, statusSite{
-			Name:       r.Name,
-			URL:        resolvedSiteURL(r),
-			Source:     resolvedSiteSource(s, r),
-			Kind:       r.Kind,
-			PHP:        r.PHP,
-			PHPMissing: r.PHP != "" && !installed[r.PHP],
-			Secure:     r.Secure,
-			Path:       r.Path,
-			Docroot:    r.Docroot,
-			Target:     r.Target,
-			AliasOf:    r.AliasOf,
-			EnvFile:    r.EnvFile,
+			Name:          r.Name,
+			URL:           resolvedSiteURL(r),
+			Source:        resolvedSiteSource(s, r),
+			Kind:          r.Kind,
+			PHP:           r.PHP,
+			PHPMissing:    r.PHP != "" && !installed[r.PHP],
+			Secure:        r.Secure,
+			Path:          r.Path,
+			Docroot:       r.Docroot,
+			Target:        r.Target,
+			AliasOf:       r.AliasOf,
+			EnvFile:       r.EnvFile,
+			Driver:        r.Driver,
+			ServerEnvFile: r.ServerEnvFile,
 		})
 	}
 	enc := json.NewEncoder(cmd.OutOrStdout())
