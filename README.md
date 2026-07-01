@@ -1,6 +1,6 @@
-# routa
-
-![routa local web dev server for Linux](assets/media/routa-header.webp)
+<h1 align="center">
+  <img src="assets/media/logo-full.svg" alt="routa" width="520">
+</h1>
 
 routa is a Linux local-development server for PHP, static, and proxied
 dev-server projects under `.test` domains with local HTTPS.
@@ -670,3 +670,10 @@ routa uninstall --purge         # remove services, untrust CA, wipe routa state/
 `--purge` deletes routa-owned XDG directories named `routa`
 (`~/.local/share/routa`, `~/.local/state/routa`, and `~/.config/routa`). It does
 not delete your website/project directories referenced by tracked dirs or links.
+
+## Logo
+
+The routa logo and brand marks were designed by
+**[Scott Zirkel](https://github.com/scottzirkel)**, by hand — no AI involved.
+
+No, it's not a turnip. It's a rutabaga. Get it? Routa... ruta... Shut up, it works.
