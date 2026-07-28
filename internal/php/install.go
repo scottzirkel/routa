@@ -194,63 +194,12 @@ func Install(ctx context.Context, r Release, out io.Writer) error {
 	return nil
 }
 
-func InstallXdebug(ctx context.Context, version string, out io.Writer) (bool, error) {
-	if out == nil {
-		out = io.Discard
-	}
-	exact := version
-	if _, err := ParseVersion(version); err != nil {
-		resolved, err := resolveInstalledSpec(version)
-		if err != nil {
-			return false, err
-		}
-		exact = resolved
-	}
-	v, err := ParseVersion(exact)
-	if err != nil {
-		return false, err
-	}
-	url, err := xdebugArchiveURL(v)
-	if err != nil {
-		return false, err
-	}
-	dest := XdebugExtensionPath(exact)
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return false, err
-	}
-
-	fmt.Fprintf(out, "  ↓ xdebug   %s\n", exact)
-	if err := downloadAndExtract(ctx, url, dest, out); err != nil {
-		var status downloadStatusError
-		if errors.As(err, &status) && status.Code == http.StatusNotFound {
-			_ = os.Remove(dest)
-			return false, nil
-		}
-		_ = os.Remove(dest)
-		return false, err
-	}
-	return true, nil
-}
-
-func xdebugArchiveURL(version Version) (string, error) {
-	arch, err := routaAssetArch()
-	if err != nil {
-		return "", err
-	}
-	base := strings.TrimRight(os.Getenv("ROUTA_PHP_XDEBUG_BASE_URL"), "/")
-	if base == "" {
-		base = "https://github.com/scottzirkel/routa/releases/download/php-xdebug"
-	}
-	name := fmt.Sprintf("routa_php_xdebug_%s_linux_%s.tar.gz", version, arch)
-	return base + "/" + name, nil
-}
-
 func routaAssetArch() (string, error) {
 	switch runtime.GOARCH {
 	case "amd64", "arm64":
 		return runtime.GOARCH, nil
 	default:
-		return "", fmt.Errorf("unsupported Xdebug archive architecture %q", runtime.GOARCH)
+		return "", fmt.Errorf("unsupported extension archive architecture %q", runtime.GOARCH)
 	}
 }
 

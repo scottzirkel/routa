@@ -103,39 +103,53 @@ var phpXdebugInstallCmd = &cobra.Command{
 	Short: "Install the Routa-managed Xdebug extension for a PHP version",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		spec, err := explicitOrCurrentPHPSpec(args)
+		spec, err := installManagedExtension(cmd, php.XdebugExtension, args, func(s string) error {
+			_, err := php.EnsureXdebugDisabledIfAvailable(s)
+			return err
+		})
 		if err != nil {
 			return err
-		}
-		if err := requirePHP(spec); err != nil {
-			return err
-		}
-		ctx := cmd.Context()
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		installed, err := php.InstallXdebug(ctx, spec, cmd.OutOrStdout())
-		if err != nil {
-			return fmt.Errorf("install Xdebug for PHP %s: %w", spec, err)
-		}
-		if !installed {
-			exact, _ := php.ResolveInstalledSpec(spec)
-			if exact == "" {
-				exact = spec
-			}
-			return fmt.Errorf("Xdebug extension artifact is not published for PHP %s yet", exact)
-		}
-		for _, s := range xdebugConfigSpecs(spec) {
-			if _, err := php.EnsureXdebugDisabledIfAvailable(s); err != nil {
-				return err
-			}
-			if err := php.WriteFPMConfig(s); err != nil {
-				return err
-			}
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "installed Xdebug for PHP %s; defaulted to off\n", spec)
 		return applyPHPINIChange(cmd, spec)
 	},
+}
+
+// installManagedExtension downloads ext for the requested version and applies
+// its default enablement to every spec form pointing at that build, so the
+// major.minor and patch FPM instances agree.
+func installManagedExtension(cmd *cobra.Command, ext php.ManagedExtension, args []string, apply func(string) error) (string, error) {
+	spec, err := explicitOrCurrentPHPSpec(args)
+	if err != nil {
+		return "", err
+	}
+	if err := requirePHP(spec); err != nil {
+		return "", err
+	}
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	installed, err := php.InstallExtension(ctx, ext, spec, cmd.OutOrStdout())
+	if err != nil {
+		return "", fmt.Errorf("install %s for PHP %s: %w", ext.Name, spec, err)
+	}
+	if !installed {
+		exact, _ := php.ResolveInstalledSpec(spec)
+		if exact == "" {
+			exact = spec
+		}
+		return "", fmt.Errorf("%s extension artifact is not published for PHP %s yet", ext.Name, exact)
+	}
+	for _, s := range phpConfigSpecs(spec) {
+		if err := apply(s); err != nil {
+			return "", err
+		}
+		if err := php.WriteFPMConfig(s); err != nil {
+			return "", err
+		}
+	}
+	return spec, nil
 }
 
 var phpXdebugOnCmd = &cobra.Command{
@@ -163,6 +177,7 @@ var phpXdebugOnCmd = &cobra.Command{
 			return err
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "enabled Xdebug for PHP %s\n", spec)
+		warnPcovOwnsCoverage(cmd, spec, opts.Mode)
 		return applyPHPINIChange(cmd, spec)
 	},
 }
@@ -226,6 +241,152 @@ var phpXdebugStatusCmd = &cobra.Command{
 		fmt.Fprintf(w, "%s\t%s\n", php.ZendExtensionKey, valueOrDefault(status.ZendExtension, "(unset)"))
 		return w.Flush()
 	},
+}
+
+var phpPcovIncludeFPM bool
+
+var phpPcovCmd = &cobra.Command{
+	Use:   "pcov",
+	Short: "Toggle pcov code coverage for an installed PHP build",
+}
+
+var phpPcovInstallCmd = &cobra.Command{
+	Use:   "install [version]",
+	Short: "Install the Routa-managed pcov extension for a PHP version",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		spec, err := installManagedExtension(cmd, php.PcovExtension, args, func(s string) error {
+			_, err := php.EnsurePcovEnabledIfAvailable(s)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "installed pcov for PHP %s; enabled for CLI coverage\n", spec)
+		warnXdebugAlsoCollectsCoverage(cmd, spec)
+		return applyPHPINIChange(cmd, spec)
+	},
+}
+
+var phpPcovOnCmd = &cobra.Command{
+	Use:   "on [version]",
+	Short: "Enable pcov for a PHP version",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		spec, err := explicitOrCurrentPHPSpec(args)
+		if err != nil {
+			return err
+		}
+		if err := requirePHP(spec); err != nil {
+			return err
+		}
+		if err := requireExtensionAvailable(spec, php.PcovExtension); err != nil {
+			return err
+		}
+		if err := php.EnablePcov(spec, php.PcovOptions{IncludeFPM: phpPcovIncludeFPM}); err != nil {
+			return err
+		}
+		scope := "CLI only"
+		if phpPcovIncludeFPM {
+			scope = "CLI and FPM"
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "enabled pcov for PHP %s (%s)\n", spec, scope)
+		warnXdebugAlsoCollectsCoverage(cmd, spec)
+		return applyPHPINIChange(cmd, spec)
+	},
+}
+
+var phpPcovOffCmd = &cobra.Command{
+	Use:   "off [version]",
+	Short: "Disable pcov for a PHP version",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		spec, err := explicitOrCurrentPHPSpec(args)
+		if err != nil {
+			return err
+		}
+		if err := requirePHP(spec); err != nil {
+			return err
+		}
+		if err := php.DisablePcov(spec); err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "disabled pcov for PHP %s\n", spec)
+		return applyPHPINIChange(cmd, spec)
+	},
+}
+
+var phpPcovStatusCmd = &cobra.Command{
+	Use:   "status [version]",
+	Short: "Show pcov status for a PHP version",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		spec, err := explicitOrCurrentPHPSpec(args)
+		if err != nil {
+			return err
+		}
+		if err := requirePHP(spec); err != nil {
+			return err
+		}
+		modules, err := php.Modules(spec)
+		if err != nil {
+			return err
+		}
+		status, err := php.PcovINIStatus(spec, modules)
+		if err != nil {
+			return err
+		}
+		switch {
+		case !status.Available:
+			fmt.Fprintf(cmd.OutOrStdout(), "pcov is not available in PHP %s\n", spec)
+		case status.Enabled:
+			fmt.Fprintf(cmd.OutOrStdout(), "pcov is enabled for PHP %s\n", spec)
+		default:
+			fmt.Fprintf(cmd.OutOrStdout(), "pcov is disabled for PHP %s\n", spec)
+		}
+		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
+		fmt.Fprintln(w, "KEY\tVALUE")
+		fmt.Fprintf(w, "available\t%t\n", status.Available)
+		fmt.Fprintf(w, "enabled\t%t\n", status.Enabled)
+		fmt.Fprintf(w, "%s\t%s\n", php.ExtensionKey, valueOrDefault(status.Extension, "(unset)"))
+		scope := "per-SAPI default"
+		if status.Pinned {
+			scope = "pinned in php.ini"
+		}
+		fmt.Fprintf(w, "%s (cli)\t%s\n", php.PcovEnabledKey, valueOrDefault(status.CLIEnabled, "(unset)"))
+		fmt.Fprintf(w, "%s (fpm)\t%s\n", php.PcovEnabledKey, valueOrDefault(status.FPMEnabled, "(unset)"))
+		fmt.Fprintf(w, "source\t%s\n", scope)
+		return w.Flush()
+	},
+}
+
+// warnXdebugAlsoCollectsCoverage flags the redundant case: PHPUnit picks pcov
+// ahead of Xdebug, so an Xdebug coverage mode only costs speed once pcov is on.
+func warnXdebugAlsoCollectsCoverage(cmd *cobra.Command, spec string) {
+	modules, _ := php.Modules(spec)
+	status, err := php.XdebugINIStatus(spec, modules)
+	if err != nil || !status.Enabled || !php.ModeIncludesCoverage(status.Mode) {
+		return
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"  warning: xdebug.mode is %q for PHP %s. pcov takes precedence for coverage, so Xdebug's costs speed for nothing. Run: routa php xdebug on %s\n",
+		status.Mode, spec, spec)
+}
+
+// warnPcovOwnsCoverage is the mirror: the user asked Xdebug for coverage while
+// pcov is already installed and will win the driver selection anyway.
+func warnPcovOwnsCoverage(cmd *cobra.Command, spec, mode string) {
+	if !php.ModeIncludesCoverage(mode) {
+		return
+	}
+	modules, _ := php.Modules(spec)
+	status, err := php.PcovINIStatus(spec, modules)
+	if err != nil || !status.Enabled {
+		return
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"  warning: pcov is enabled for PHP %s and takes precedence for coverage; xdebug.mode=coverage will not be used. Run: routa php pcov off %s to hand coverage back to Xdebug\n",
+		spec, spec)
 }
 
 func explicitOrCurrentPHPSpec(args []string) (string, error) {
@@ -386,12 +547,14 @@ var phpInstallCmd = &cobra.Command{
 		if err := php.Install(ctx, *rel, os.Stdout); err != nil {
 			return err
 		}
-		if installed, err := php.InstallXdebug(ctx, rel.Version.String(), os.Stdout); err != nil {
-			fmt.Fprintf(os.Stderr, "  warning: Xdebug install: %v\n", err)
-		} else if installed {
-			fmt.Printf("→ Xdebug extension installed for %s\n", rel.Version)
-		} else {
-			fmt.Printf("→ Xdebug extension not published for %s; install continues\n", rel.Version)
+		for _, ext := range php.ManagedExtensions() {
+			if installed, err := php.InstallExtension(ctx, ext, rel.Version.String(), os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "  warning: %s install: %v\n", ext.Name, err)
+			} else if installed {
+				fmt.Printf("→ %s extension installed for %s\n", ext.Name, rel.Version)
+			} else {
+				fmt.Printf("→ %s extension not published for %s; install continues\n", ext.Name, rel.Version)
+			}
 		}
 
 		// Write fpm config for both forms so either unit instance works.
@@ -400,6 +563,11 @@ var phpInstallCmd = &cobra.Command{
 				return err
 			} else if enabled {
 				fmt.Printf("→ Xdebug available for %s; defaulted to off\n", s)
+			}
+			if enabled, err := php.EnsurePcovEnabledIfAvailable(s); err != nil {
+				return err
+			} else if enabled {
+				fmt.Printf("→ pcov available for %s; enabled for CLI coverage\n", s)
 			}
 			if err := php.WriteFPMConfig(s); err != nil {
 				return err
@@ -563,7 +731,11 @@ func requirePHPModule(spec, module string) error {
 }
 
 func requireXdebugAvailable(spec string) error {
-	if php.XdebugExtensionAvailable(spec) {
+	return requireExtensionAvailable(spec, php.XdebugExtension)
+}
+
+func requireExtensionAvailable(spec string, ext php.ManagedExtension) error {
+	if ext.Available(spec) {
 		return nil
 	}
 	modules, err := php.Modules(spec)
@@ -571,14 +743,16 @@ func requireXdebugAvailable(spec string) error {
 		return err
 	}
 	for _, installed := range modules {
-		if strings.EqualFold(installed, "xdebug") {
+		if strings.EqualFold(installed, ext.Name) {
 			return nil
 		}
 	}
-	return fmt.Errorf("Xdebug is not installed for PHP %s. Run: routa php xdebug install %s", spec, spec)
+	return fmt.Errorf("%s is not installed for PHP %s. Run: routa php %s install %s", ext.Name, spec, ext.Name, spec)
 }
 
-func xdebugConfigSpecs(spec string) []string {
+// phpConfigSpecs lists every spec form that resolves to the same build — the
+// patch version and any major.minor alias — so ini and FPM changes reach both.
+func phpConfigSpecs(spec string) []string {
 	seen := map[string]bool{}
 	var specs []string
 	add := func(s string) {
@@ -819,11 +993,14 @@ func init() {
 	phpXdebugOnCmd.Flags().StringVar(&phpXdebugStartWithRequest, "start-with-request", defaultXdebug.StartWithRequest, "Xdebug start_with_request value")
 	phpXdebugOnCmd.Flags().StringVar(&phpXdebugClientHost, "client-host", defaultXdebug.ClientHost, "Xdebug client host")
 	phpXdebugOnCmd.Flags().StringVar(&phpXdebugClientPort, "client-port", defaultXdebug.ClientPort, "Xdebug client port")
+	phpPcovCmd.AddCommand(phpPcovInstallCmd, phpPcovOnCmd, phpPcovOffCmd, phpPcovStatusCmd)
+	phpPcovOnCmd.Flags().BoolVar(&phpPcovIncludeFPM, "fpm", false, "Also enable pcov for PHP-FPM (off by default; coverage is a CLI concern)")
 	phpINICmd.AddCommand(phpINIShowCmd, phpINIPathCmd, phpINISetCmd, phpINIUnsetCmd, phpINIEditCmd)
 	phpINISetCmd.Flags().SetInterspersed(false)
 	phpCmd.AddCommand(phpInstallCmd, phpListCmd, phpUseCmd, phpRmCmd)
 	phpCmd.AddCommand(phpExtCmd)
 	phpCmd.AddCommand(phpINICmd)
 	phpCmd.AddCommand(phpXdebugCmd)
+	phpCmd.AddCommand(phpPcovCmd)
 	rootCmd.AddCommand(phpCmd, composerCmd, whichPHPCmd)
 }

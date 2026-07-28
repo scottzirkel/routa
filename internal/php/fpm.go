@@ -91,7 +91,7 @@ func WriteFPMConfig(spec string) error {
 	if err := os.MkdirAll(paths.LogDir(), 0o755); err != nil {
 		return err
 	}
-	settings, err := EffectiveINISettings(spec)
+	settings, err := RenderedINISettings(spec, SAPIFPM)
 	if err != nil {
 		return err
 	}
@@ -119,10 +119,13 @@ func WriteFPMConfig(spec string) error {
 	})
 }
 
+// poolINISettings drops the extension-loading keys. FPM pools apply these as
+// php_admin_value, which runs long after module startup, so extension= and
+// zend_extension= only work from the master php.ini WriteFPMConfig renders.
 func poolINISettings(settings []INISetting) []INISetting {
 	out := make([]INISetting, 0, len(settings))
 	for _, setting := range settings {
-		if setting.Key == ZendExtensionKey {
+		if setting.Key == ZendExtensionKey || setting.Key == ExtensionKey {
 			continue
 		}
 		out = append(out, setting)

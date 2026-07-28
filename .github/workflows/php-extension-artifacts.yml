@@ -1,0 +1,61 @@
+name: php extension artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      php_versions:
+        description: Space-separated exact PHP versions to build
+        required: true
+        default: "8.2.30 8.3.30 8.4.20 8.5.5"
+      release_tag:
+        description: GitHub release tag that stores PHP shared-extension artifacts
+        required: true
+        default: php-extensions
+      legacy_xdebug_tag:
+        description: Older release tag kept in sync so pre-v1.12 routa installs keep resolving Xdebug (blank to skip)
+        required: false
+        default: php-xdebug
+
+permissions:
+  contents: write
+
+jobs:
+  extensions:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Docker
+        run: docker version
+
+      - name: Build extension artifacts
+        run: ./scripts/build-php-extension-artifacts.sh ${{ inputs.php_versions }}
+
+      - name: Upload extension artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" \
+              --title "PHP shared extension artifacts" \
+              --notes "Routa-managed Xdebug and pcov shared extensions for static-php-cli gnu-bulk PHP builds."
+          gh release upload "$RELEASE_TAG" dist/routa_php_*_linux_${{ matrix.arch }}.tar.gz --clobber
+          gh release upload "$RELEASE_TAG" dist/routa_php_ext_linux_${{ matrix.arch }}_checksums.txt --clobber
+
+      - name: Mirror Xdebug artifacts to the legacy release
+        if: inputs.legacy_xdebug_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LEGACY_TAG: ${{ inputs.legacy_xdebug_tag }}
+        run: |
+          gh release view "$LEGACY_TAG" >/dev/null 2>&1 || exit 0
+          gh release upload "$LEGACY_TAG" dist/routa_php_xdebug_*_linux_${{ matrix.arch }}.tar.gz --clobber

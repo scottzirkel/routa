@@ -19,11 +19,23 @@ type INISetting struct {
 }
 
 const (
+	ExtensionKey              = "extension"
 	ZendExtensionKey          = "zend_extension"
 	XdebugModeKey             = "xdebug.mode"
 	XdebugStartWithRequestKey = "xdebug.start_with_request"
 	XdebugClientHostKey       = "xdebug.client_host"
 	XdebugClientPortKey       = "xdebug.client_port"
+	PcovEnabledKey            = "pcov.enabled"
+)
+
+// SAPI distinguishes the two php.ini files routa renders from one per-version
+// settings file: the CLI file referenced by PHPRC, and the FPM file passed to
+// php-fpm --php-ini.
+type SAPI int
+
+const (
+	SAPICLI SAPI = iota
+	SAPIFPM
 )
 
 type XdebugOptions struct {
@@ -41,6 +53,25 @@ type XdebugStatus struct {
 	ClientHost       string
 	ClientPort       string
 	ZendExtension    string
+}
+
+type PcovOptions struct {
+	// IncludeFPM pins pcov.enabled=1 for every SAPI instead of leaving the
+	// CLI-only default in place.
+	IncludeFPM bool
+}
+
+type PcovStatus struct {
+	Available bool
+	Enabled   bool
+	Extension string
+	// CLIEnabled and FPMEnabled are the rendered pcov.enabled values each SAPI
+	// actually receives.
+	CLIEnabled string
+	FPMEnabled string
+	// Pinned is true when pcov.enabled is set explicitly rather than left to
+	// the per-SAPI default.
+	Pinned bool
 }
 
 func LaravelINISettings() []INISetting {
@@ -87,6 +118,35 @@ func EffectiveINISettings(spec string) ([]INISetting, error) {
 	return settings, nil
 }
 
+// RenderedINISettings is EffectiveINISettings plus the per-SAPI pcov default.
+// Coverage collection earns its memory in the CLI, where test runners live, and
+// never in FPM, where pcov would index every request's files for nothing — so
+// the same loaded pcov.so is enabled for one and inert for the other. An
+// explicit pcov.enabled in the per-version php.ini wins over both.
+func RenderedINISettings(spec string, sapi SAPI) ([]INISetting, error) {
+	settings, err := EffectiveINISettings(spec)
+	if err != nil {
+		return nil, err
+	}
+	loaded := false
+	for _, setting := range settings {
+		if strings.EqualFold(setting.Key, PcovEnabledKey) {
+			return settings, nil
+		}
+		if setting.Key == ExtensionKey && PcovExtension.loadedBy(setting.Value) {
+			loaded = true
+		}
+	}
+	if !loaded {
+		return settings, nil
+	}
+	value := "0"
+	if sapi == SAPICLI {
+		value = "1"
+	}
+	return append(settings, INISetting{Key: PcovEnabledKey, Value: value}), nil
+}
+
 func DefaultXdebugOptions() XdebugOptions {
 	return XdebugOptions{
 		Mode:             "debug,develop",
@@ -96,13 +156,15 @@ func DefaultXdebugOptions() XdebugOptions {
 	}
 }
 
-func XdebugExtensionPath(spec string) string {
-	return filepath.Join(paths.PHPDir(), spec, "extensions", "xdebug.so")
-}
-
-func XdebugExtensionAvailable(spec string) bool {
-	info, err := os.Stat(XdebugExtensionPath(spec))
-	return err == nil && !info.IsDir()
+// ModeIncludesCoverage reports whether an xdebug.mode value asks Xdebug to
+// collect code coverage — the one job routa hands to pcov instead.
+func ModeIncludesCoverage(mode string) bool {
+	for _, part := range strings.Split(mode, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), "coverage") {
+			return true
+		}
+	}
+	return false
 }
 
 func EnableXdebug(spec string, opts XdebugOptions) error {
@@ -119,8 +181,8 @@ func EnableXdebug(spec string, opts XdebugOptions) error {
 		opts.ClientPort = DefaultXdebugOptions().ClientPort
 	}
 	settings := []INISetting{}
-	if XdebugExtensionAvailable(spec) {
-		settings = append(settings, INISetting{Key: ZendExtensionKey, Value: XdebugExtensionPath(spec)})
+	if XdebugExtension.Available(spec) {
+		settings = append(settings, INISetting{Key: ZendExtensionKey, Value: XdebugExtension.Path(spec)})
 	}
 	settings = append(settings, []INISetting{
 		{Key: XdebugModeKey, Value: opts.Mode},
@@ -142,7 +204,7 @@ func DisableXdebug(spec string) error {
 		return err
 	}
 	for _, setting := range settings {
-		if setting.Key == ZendExtensionKey && isXdebugZendExtension(setting.Value) {
+		if setting.Key == ZendExtensionKey && XdebugExtension.loadedBy(setting.Value) {
 			if err := UnsetINISetting(spec, ZendExtensionKey); err != nil {
 				return err
 			}
@@ -160,8 +222,85 @@ func DisableXdebug(spec string) error {
 	return nil
 }
 
+// EnablePcov loads pcov.so. It deliberately leaves pcov.enabled unset unless
+// IncludeFPM is requested, so RenderedINISettings can supply the per-SAPI
+// default and users keep `routa php ini set <v> pcov.enabled` as an override.
+func EnablePcov(spec string, opts PcovOptions) error {
+	if PcovExtension.Available(spec) {
+		if err := SetINISetting(spec, ExtensionKey, PcovExtension.Path(spec)); err != nil {
+			return err
+		}
+	}
+	if opts.IncludeFPM {
+		return SetINISetting(spec, PcovEnabledKey, "1")
+	}
+	return UnsetINISetting(spec, PcovEnabledKey)
+}
+
+func DisablePcov(spec string) error {
+	settings, err := LoadINISettings(spec)
+	if err != nil {
+		return err
+	}
+	for _, setting := range settings {
+		if setting.Key == ExtensionKey && PcovExtension.loadedBy(setting.Value) {
+			if err := UnsetINISetting(spec, ExtensionKey); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	return UnsetINISetting(spec, PcovEnabledKey)
+}
+
+// EnsurePcovEnabledIfAvailable turns pcov on for a freshly installed build.
+// Unlike Xdebug, which defaults to off because it hooks every request, pcov
+// stays loaded and costs nothing until a coverage run starts it.
+func EnsurePcovEnabledIfAvailable(spec string) (bool, error) {
+	if !PcovExtension.Available(spec) {
+		return false, nil
+	}
+	return true, EnablePcov(spec, PcovOptions{})
+}
+
+func PcovINIStatus(spec string, modules []string) (PcovStatus, error) {
+	loaded := moduleLoaded(modules, "pcov")
+	status := PcovStatus{Available: loaded || PcovExtension.Available(spec)}
+	settings, err := EffectiveINISettings(spec)
+	if err != nil {
+		return status, err
+	}
+	for _, setting := range settings {
+		switch {
+		case setting.Key == ExtensionKey && PcovExtension.loadedBy(setting.Value):
+			status.Extension = setting.Value
+		case strings.EqualFold(setting.Key, PcovEnabledKey):
+			status.Pinned = true
+		}
+	}
+	for _, sapi := range []SAPI{SAPICLI, SAPIFPM} {
+		rendered, err := RenderedINISettings(spec, sapi)
+		if err != nil {
+			return status, err
+		}
+		value := ""
+		for _, setting := range rendered {
+			if strings.EqualFold(setting.Key, PcovEnabledKey) {
+				value = setting.Value
+			}
+		}
+		if sapi == SAPICLI {
+			status.CLIEnabled = value
+		} else {
+			status.FPMEnabled = value
+		}
+	}
+	status.Enabled = status.Available && (loaded || status.Extension != "") && status.CLIEnabled != "0"
+	return status, nil
+}
+
 func EnsureXdebugDisabledIfAvailable(spec string) (bool, error) {
-	available := XdebugExtensionAvailable(spec)
+	available := XdebugExtension.Available(spec)
 	modules, err := Modules(spec)
 	if err != nil {
 		if !available {
@@ -178,7 +317,7 @@ func EnsureXdebugDisabledIfAvailable(spec string) (bool, error) {
 
 func XdebugINIStatus(spec string, modules []string) (XdebugStatus, error) {
 	loaded := moduleLoaded(modules, "xdebug")
-	status := XdebugStatus{Available: loaded || XdebugExtensionAvailable(spec)}
+	status := XdebugStatus{Available: loaded || XdebugExtension.Available(spec)}
 	settings, err := EffectiveINISettings(spec)
 	if err != nil {
 		return status, err
@@ -192,14 +331,9 @@ func XdebugINIStatus(spec string, modules []string) (XdebugStatus, error) {
 	status.ClientHost = values[XdebugClientHostKey]
 	status.ClientPort = values[XdebugClientPortKey]
 	status.ZendExtension = values[ZendExtensionKey]
-	configured := isXdebugZendExtension(status.ZendExtension)
+	configured := XdebugExtension.loadedBy(status.ZendExtension)
 	status.Enabled = status.Available && (loaded || configured) && !strings.EqualFold(status.Mode, "off")
 	return status, nil
-}
-
-func isXdebugZendExtension(value string) bool {
-	value = strings.Trim(strings.TrimSpace(value), `"'`)
-	return strings.EqualFold(filepath.Base(value), "xdebug.so")
 }
 
 func moduleLoaded(modules []string, want string) bool {
@@ -212,7 +346,7 @@ func moduleLoaded(modules []string, want string) bool {
 }
 
 func WriteCLIConfig(spec string) (string, error) {
-	settings, err := EffectiveINISettings(spec)
+	settings, err := RenderedINISettings(spec, SAPICLI)
 	if err != nil {
 		return "", err
 	}

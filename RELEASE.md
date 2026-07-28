@@ -51,9 +51,11 @@ Before `v1.0.0`, minor releases may still include breaking changes, but prefer c
    attaches Linux `amd64` and `arm64` archives plus a checksum file.
 
 8. When the supported upstream PHP patch versions change, run the
-   `php xdebug artifacts` workflow for those exact versions so
-   `routa php install <version>` can fetch matching managed Xdebug shared
-   extensions from the `php-xdebug` release.
+   `php extension artifacts` workflow for those exact versions so
+   `routa php install <version>` can fetch matching managed Xdebug and pcov
+   shared extensions from the `php-extensions` release. The workflow also
+   mirrors the Xdebug archives to the older `php-xdebug` release, which routa
+   before v1.12 still resolves against.
 
 9. For AUR releases, update `packaging/aur/routa-bin/PKGBUILD` with the new
    `pkgver` and release checksums, regenerate `.SRCINFO`, then publish those

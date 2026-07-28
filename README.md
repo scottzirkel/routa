@@ -97,6 +97,7 @@ routa php ini set 8.4 upload_max_filesize 128M
 routa php ini set 8.4 post_max_size 128M
 routa php ext list [8.4]
 routa php xdebug install [8.4] / on [8.4] / off [8.4] / status [8.4]
+routa php pcov install [8.4] / on [8.4] / off [8.4] / status [8.4]
 routa track / untrack / ignore / unignore / link / unlink / alias / unalias / isolate / secure
 routa proxy <name> <port>       # reverse-proxy <name>.test → 127.0.0.1:<port>
 routa dev [name]                # run a detected dev server and proxy it
@@ -247,6 +248,36 @@ installation. `status` reports the managed `zend_extension` path when Xdebug is
 available. `routa php xdebug install [version]` can fetch the extension later
 without reinstalling PHP if the artifact was not available during the original
 PHP install.
+
+Note that the default mode deliberately leaves out `coverage` — routa hands code
+coverage to pcov instead. See below.
+
+## pcov
+
+`routa php install <version>` also installs a Routa-managed pcov shared
+extension, the low-overhead code coverage driver PHPUnit prefers over Xdebug.
+Unlike Xdebug it defaults to **on**, because a loaded pcov costs nothing until a
+coverage run starts it:
+
+```bash
+routa php pcov status
+routa php pcov off
+routa php pcov on
+```
+
+pcov is enabled for the CLI and pinned off for PHP-FPM. Coverage is a test
+runner concern, and in FPM pcov would index every request's files for nothing —
+so `routa php` and `routa composer` get `pcov.enabled=1` while the FPM pools get
+`pcov.enabled=0` from the same per-version ini. Pass `--fpm` to `routa php pcov
+on` to enable it everywhere, or set the value by hand with `routa php ini set
+8.4 pcov.enabled 1` to override both defaults.
+
+Because PHPUnit selects pcov ahead of Xdebug whenever both are loaded, running
+`routa php vendor/bin/phpunit --coverage-text` picks up pcov with no further
+configuration. Turning pcov off hands coverage back to Xdebug, which then needs
+`coverage` added to `xdebug.mode`. Restrict what pcov scans per project with
+`pcov.directory` in `phpunit.xml` rather than routa's ini — routa's is shared by
+every site on that PHP version.
 
 ## Custom docroot
 

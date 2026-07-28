@@ -5,6 +5,16 @@ priority, not commitment.
 
 ## Pending release
 
+- **Bundled pcov coverage** — `routa php install` now installs a Routa-managed
+  `pcov.so` alongside `xdebug.so`, and `routa php pcov install/on/off/status`
+  toggles it. pcov defaults to on, enabled for the CLI and pinned off for
+  PHP-FPM, so PHPUnit picks the fast coverage driver without FPM paying for it.
+  Xdebug keeps `debug,develop` and hands coverage over; enabling both for
+  coverage now warns.
+- **Generalized extension pipeline** — the Xdebug build script and workflow are
+  now extension-agnostic, publishing every managed shared extension to the
+  `php-extensions` release while mirroring Xdebug to the legacy `php-xdebug`
+  tag for older installs.
 - **Wildcard subdomains** — site fragments include wildcard hosts such as
   `*.app.test`, while explicit subdomain links and aliases keep their own exact
   host fragments.

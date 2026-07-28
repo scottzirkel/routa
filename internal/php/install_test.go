@@ -143,54 +143,61 @@ func TestDownloadAndExtractDoesNotRetryNotFound(t *testing.T) {
 	}
 }
 
-func TestInstallXdebugDownloadsSharedExtension(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	archive := testTarGz(t, "xdebug so")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.Path, "routa_php_xdebug_8.4.20_linux_") {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/gzip")
-		_, _ = w.Write(archive)
-	}))
-	defer server.Close()
-	t.Setenv("ROUTA_PHP_XDEBUG_BASE_URL", server.URL)
+func TestInstallExtensionDownloadsSharedExtension(t *testing.T) {
+	for _, ext := range ManagedExtensions() {
+		t.Run(ext.Name, func(t *testing.T) {
+			t.Setenv("XDG_DATA_HOME", t.TempDir())
+			archive := testTarGz(t, ext.Name+" so")
+			want := fmt.Sprintf("routa_php_%s_8.4.20_linux_", ext.Name)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.Contains(r.URL.Path, want) {
+					t.Errorf("path = %s, want one containing %s", r.URL.Path, want)
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/gzip")
+				_, _ = w.Write(archive)
+			}))
+			defer server.Close()
+			t.Setenv("ROUTA_PHP_EXT_BASE_URL", server.URL)
 
-	var out bytes.Buffer
-	ok, err := InstallXdebug(context.Background(), "8.4.20", &out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok {
-		t.Fatal("expected Xdebug to be installed")
-	}
-	data, err := os.ReadFile(XdebugExtensionPath("8.4.20"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "xdebug so" {
-		t.Fatalf("xdebug.so = %q", data)
-	}
-	if !strings.Contains(out.String(), "xdebug   8.4.20") {
-		t.Fatalf("install output missing xdebug download:\n%s", out.String())
+			var out bytes.Buffer
+			ok, err := InstallExtension(context.Background(), ext, "8.4.20", &out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok {
+				t.Fatalf("expected %s to be installed", ext.Name)
+			}
+			data, err := os.ReadFile(ext.Path("8.4.20"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != ext.Name+" so" {
+				t.Fatalf("%s.so = %q", ext.Name, data)
+			}
+			if !strings.Contains(out.String(), ext.Name) {
+				t.Fatalf("install output missing %s download:\n%s", ext.Name, out.String())
+			}
+		})
 	}
 }
 
-func TestInstallXdebugSkipsMissingArtifact(t *testing.T) {
+func TestInstallExtensionSkipsMissingArtifact(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	server := httptest.NewServer(http.NotFoundHandler())
 	defer server.Close()
-	t.Setenv("ROUTA_PHP_XDEBUG_BASE_URL", server.URL)
+	t.Setenv("ROUTA_PHP_EXT_BASE_URL", server.URL)
 
-	ok, err := InstallXdebug(context.Background(), "8.4.20", io.Discard)
+	ok, err := InstallExtension(context.Background(), PcovExtension, "8.4.20", io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ok {
 		t.Fatal("expected missing artifact to be skipped")
 	}
-	if _, err := os.Stat(XdebugExtensionPath("8.4.20")); !os.IsNotExist(err) {
-		t.Fatalf("xdebug.so exists after missing artifact: %v", err)
+	if _, err := os.Stat(PcovExtension.Path("8.4.20")); !os.IsNotExist(err) {
+		t.Fatalf("pcov.so exists after missing artifact: %v", err)
 	}
 }
 

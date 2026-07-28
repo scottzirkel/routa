@@ -88,7 +88,7 @@ func TestWriteFPMConfigWritesZendExtensionToPHPIni(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
-	extPath := XdebugExtensionPath("8.4")
+	extPath := XdebugExtension.Path("8.4")
 	if err := os.MkdirAll(filepath.Dir(extPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestXdebugToggleSharedExtension(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	extPath := XdebugExtensionPath("8.4")
+	extPath := XdebugExtension.Path("8.4")
 	if err := os.MkdirAll(filepath.Dir(extPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -259,6 +259,7 @@ func TestXdebugToggleSharedExtension(t *testing.T) {
 
 func TestXdebugStatusUnavailableWhenModuleMissing(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	if err := EnableXdebug("8.4", XdebugOptions{}); err != nil {
 		t.Fatal(err)
@@ -276,7 +277,7 @@ func TestEnsureXdebugDisabledIfAvailableUsesSharedExtension(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-	extPath := XdebugExtensionPath("8.4")
+	extPath := XdebugExtension.Path("8.4")
 	if err := os.MkdirAll(filepath.Dir(extPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -355,5 +356,201 @@ func TestEnsureXdebugDisabledIfAvailableWritesOffDefaults(t *testing.T) {
 	}
 	if !status.Available || status.Enabled || status.Mode != "off" || status.StartWithRequest != "default" {
 		t.Fatalf("status = %#v", status)
+	}
+}
+
+func installTestPcov(t *testing.T, spec string) string {
+	t.Helper()
+	extPath := PcovExtension.Path(spec)
+	if err := os.MkdirAll(filepath.Dir(extPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(extPath, []byte("pcov"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return extPath
+}
+
+func renderedValue(t *testing.T, spec string, sapi SAPI, key string) string {
+	t.Helper()
+	settings, err := RenderedINISettings(spec, sapi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := ""
+	for _, setting := range settings {
+		if strings.EqualFold(setting.Key, key) {
+			value = setting.Value
+		}
+	}
+	return value
+}
+
+func TestPcovEnabledForCLIAndInertForFPM(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	extPath := installTestPcov(t, "8.4")
+	if err := EnablePcov("8.4", PcovOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		sapi SAPI
+		want string
+	}{
+		{SAPICLI, "1"},
+		{SAPIFPM, "0"},
+	} {
+		if got := renderedValue(t, "8.4", tc.sapi, ExtensionKey); got != extPath {
+			t.Fatalf("extension = %q, want %q", got, extPath)
+		}
+		if got := renderedValue(t, "8.4", tc.sapi, PcovEnabledKey); got != tc.want {
+			t.Fatalf("pcov.enabled = %q, want %q", got, tc.want)
+		}
+	}
+
+	// The default must stay out of the per-version file so it can flip later.
+	settings, err := LoadINISettings("8.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, setting := range settings {
+		if strings.EqualFold(setting.Key, PcovEnabledKey) {
+			t.Fatalf("pcov.enabled should not be persisted by default: %#v", settings)
+		}
+	}
+}
+
+func TestPcovExplicitEnabledWinsOverSAPIDefault(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	installTestPcov(t, "8.4")
+	if err := EnablePcov("8.4", PcovOptions{IncludeFPM: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, sapi := range []SAPI{SAPICLI, SAPIFPM} {
+		if got := renderedValue(t, "8.4", sapi, PcovEnabledKey); got != "1" {
+			t.Fatalf("pcov.enabled = %q for sapi %v, want 1", got, sapi)
+		}
+	}
+
+	// A hand-edited pcov.enabled=0 must survive rendering for both SAPIs.
+	if err := SetINISetting("8.4", PcovEnabledKey, "0"); err != nil {
+		t.Fatal(err)
+	}
+	for _, sapi := range []SAPI{SAPICLI, SAPIFPM} {
+		if got := renderedValue(t, "8.4", sapi, PcovEnabledKey); got != "0" {
+			t.Fatalf("pcov.enabled = %q for sapi %v, want 0", got, sapi)
+		}
+	}
+}
+
+func TestDisablePcovClearsExtensionAndPin(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	installTestPcov(t, "8.4")
+	if err := EnablePcov("8.4", PcovOptions{IncludeFPM: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := DisablePcov("8.4"); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, err := LoadINISettings("8.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(settings) != 0 {
+		t.Fatalf("settings = %#v, want empty after disable", settings)
+	}
+	if got := renderedValue(t, "8.4", SAPICLI, PcovEnabledKey); got != "" {
+		t.Fatalf("pcov.enabled = %q, want unset once pcov is unloaded", got)
+	}
+
+	status, err := PcovINIStatus("8.4", []string{"Core"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Available || status.Enabled {
+		t.Fatalf("status = %#v, want available but disabled", status)
+	}
+}
+
+func TestPcovStatusReportsPerSAPIValues(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	extPath := installTestPcov(t, "8.4")
+	if _, err := EnsurePcovEnabledIfAvailable("8.4"); err != nil {
+		t.Fatal(err)
+	}
+	status, err := PcovINIStatus("8.4", []string{"Core", "pcov"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Available || !status.Enabled || status.Pinned {
+		t.Fatalf("status = %#v, want available, enabled, unpinned", status)
+	}
+	if status.Extension != extPath {
+		t.Fatalf("extension = %q, want %q", status.Extension, extPath)
+	}
+	if status.CLIEnabled != "1" || status.FPMEnabled != "0" {
+		t.Fatalf("cli = %q, fpm = %q, want 1 and 0", status.CLIEnabled, status.FPMEnabled)
+	}
+}
+
+func TestWriteFPMConfigKeepsExtensionOutOfPoolValues(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	extPath := installTestPcov(t, "8.4")
+	if err := EnablePcov("8.4", PcovOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteFPMConfig("8.4"); err != nil {
+		t.Fatal(err)
+	}
+
+	runDir := filepath.Join(os.Getenv("XDG_STATE_HOME"), "routa", "run")
+	confData, err := os.ReadFile(filepath.Join(runDir, "php-fpm-8.4.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(confData), "php_admin_value[extension]") {
+		t.Fatalf("extension should be written to php.ini, not pool config:\n%s", confData)
+	}
+
+	iniData, err := os.ReadFile(filepath.Join(runDir, "php-fpm-8.4.ini"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(iniData), "extension = "+extPath) {
+		t.Fatalf("FPM php.ini missing extension:\n%s", iniData)
+	}
+	if !strings.Contains(string(iniData), "pcov.enabled = 0") {
+		t.Fatalf("FPM php.ini should pin pcov.enabled off:\n%s", iniData)
+	}
+}
+
+func TestModeIncludesCoverage(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		want bool
+	}{
+		{"debug,develop", false},
+		{"coverage", true},
+		{"debug, coverage ,develop", true},
+		{"Coverage", true},
+		{"off", false},
+		{"", false},
+		{"develop,coverages", false},
+	} {
+		if got := ModeIncludesCoverage(tc.mode); got != tc.want {
+			t.Fatalf("ModeIncludesCoverage(%q) = %t, want %t", tc.mode, got, tc.want)
+		}
 	}
 }

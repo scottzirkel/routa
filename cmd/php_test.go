@@ -64,7 +64,7 @@ func TestExplicitOrCurrentPHPSpecDefaultsToCurrentPHP(t *testing.T) {
 	}
 }
 
-func TestXdebugConfigSpecsIncludesAliasWhenPresent(t *testing.T) {
+func TestPHPConfigSpecsIncludesAliasWhenPresent(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	exact := filepath.Join(paths.PHPDir(), "8.4.20")
@@ -75,7 +75,7 @@ func TestXdebugConfigSpecsIncludesAliasWhenPresent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := xdebugConfigSpecs("8.4.20")
+	got := phpConfigSpecs("8.4.20")
 	want := []string{"8.4.20", "8.4"}
 	if len(got) != len(want) {
 		t.Fatalf("specs = %#v, want %#v", got, want)
