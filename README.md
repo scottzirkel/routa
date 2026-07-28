@@ -279,6 +279,37 @@ configuration. Turning pcov off hands coverage back to Xdebug, which then needs
 `pcov.directory` in `phpunit.xml` rather than routa's ini — routa's is shared by
 every site on that PHP version.
 
+### Shared extensions need a dynamically-linked CLI
+
+The upstream `gnu-bulk` PHP builds link glibc **statically**, and Linux cannot
+`dlopen` into such a binary. Those builds therefore cannot load pcov, Xdebug, or
+any other shared extension no matter how php.ini is configured — the `.so` is
+installed and simply never loads.
+
+`routa php pcov status` reports this directly:
+
+```
+loadable   false
+cli        ~/.local/share/routa/php/8.4/bin/php
+```
+
+To fix it, put a dynamically-linked CLI at `bin/php-dynamic` beside the stock
+`bin/php` for that version. routa prefers `php-dynamic` for `routa php` and
+`routa composer` whenever it exists, and `routa php install` never overwrites
+it, so it survives reinstalls. `php-fpm` is untouched: it keeps serving sites
+from the stock static binary, which is also why pcov defaults to CLI-only.
+
+Build one with static-php-cli, matching the extension set in the channel's
+`README.txt` so the CLI and FPM binaries agree:
+
+```bash
+git clone --depth=1 --branch 2.8.5 https://github.com/crazywhalecc/static-php-cli.git
+cd static-php-cli
+bin/spc-gnu-docker download --with-php=8.4.20 --for-extensions="<exts>,pcov" --prefer-pre-built
+bin/spc-gnu-docker build "<exts>" --build-cli --build-shared=pcov
+cp buildroot/bin/php ~/.local/share/routa/php/8.4.20/bin/php-dynamic
+```
+
 ## Custom docroot
 
 Auto-detection picks PHP `public/`, PHP at the root, static `public/`, then

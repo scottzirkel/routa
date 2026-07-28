@@ -221,3 +221,69 @@ func testTarGz(t *testing.T, content string) []byte {
 	}
 	return buf.Bytes()
 }
+
+func TestSupportsSharedExtensionsReportsUnknownRatherThanGuessing(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "script")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, path := range map[string]string{
+		"missing":  filepath.Join(dir, "does-not-exist"),
+		"not-elf":  script,
+		"data-dir": dir,
+	} {
+		if _, known := SupportsSharedExtensions(path); known {
+			t.Fatalf("%s: expected an unknown verdict, got a definite one", name)
+		}
+	}
+}
+
+func TestSupportsSharedExtensionsDetectsDynamicBinary(t *testing.T) {
+	// A dynamically-linked ELF carries PT_INTERP; a statically-linked libc
+	// build does not, and that is exactly what routa must refuse to load into.
+	var dynamic string
+	for _, candidate := range []string{"/bin/sh", "/usr/bin/env", "/bin/ls"} {
+		if _, known := SupportsSharedExtensions(candidate); known {
+			dynamic = candidate
+			break
+		}
+	}
+	if dynamic == "" {
+		t.Skip("no inspectable system ELF binary available")
+	}
+	supported, known := SupportsSharedExtensions(dynamic)
+	if !known || !supported {
+		t.Fatalf("%s: supported = %t, known = %t, want a dynamically-linked verdict", dynamic, supported, known)
+	}
+}
+
+func TestCLIRejectsSharedExtensionsNeverGuessesWithoutABinary(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	if CLIRejectsSharedExtensions("8.4") {
+		t.Fatal("must not claim rejection when the CLI cannot be inspected")
+	}
+}
+
+func TestBinPathPrefersDynamicCLIWhenPresent(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	binDir := filepath.Join(os.Getenv("XDG_DATA_HOME"), "routa", "php", "8.4", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "php"), []byte("stock"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := BinPath("8.4"); got != StockBinPath("8.4") {
+		t.Fatalf("BinPath = %q, want the stock CLI %q", got, StockBinPath("8.4"))
+	}
+
+	dynamic := filepath.Join(binDir, DynamicCLIName)
+	if err := os.WriteFile(dynamic, []byte("dynamic"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := BinPath("8.4"); got != dynamic {
+		t.Fatalf("BinPath = %q, want the dynamic CLI %q", got, dynamic)
+	}
+}

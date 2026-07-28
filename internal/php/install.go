@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"debug/elf"
 	"errors"
 	"fmt"
 	"io"
@@ -22,8 +23,50 @@ func versionDir(version string) string { return filepath.Join(paths.PHPDir(), ve
 
 type Installed struct{ Version string }
 
+// DynamicCLIName is a CLI binary installed beside the stock one that links libc
+// dynamically. The upstream gnu-bulk builds link glibc statically, and Linux
+// cannot dlopen into such a binary, so they can never load a shared extension.
+// Dropping php-dynamic in beside php restores pcov for the CLI without touching
+// the php-fpm binary serving sites — and Install leaves it alone, so it also
+// survives a reinstall.
+const DynamicCLIName = "php-dynamic"
+
+// BinPath is the CLI routa runs for a version, preferring a dynamic build.
 func BinPath(spec string) string {
+	dynamic := filepath.Join(paths.PHPDir(), spec, "bin", DynamicCLIName)
+	if info, err := os.Stat(dynamic); err == nil && !info.IsDir() {
+		return dynamic
+	}
+	return StockBinPath(spec)
+}
+
+// StockBinPath is the CLI as shipped by the upstream build.
+func StockBinPath(spec string) string {
 	return filepath.Join(paths.PHPDir(), spec, "bin", "php")
+}
+
+// SupportsSharedExtensions reports whether a PHP binary can dlopen extensions,
+// and whether that could be determined at all. A binary with no ELF interpreter
+// links libc statically and will refuse every .so no matter what php.ini says.
+func SupportsSharedExtensions(binPath string) (supported bool, known bool) {
+	f, err := elf.Open(binPath)
+	if err != nil {
+		return false, false
+	}
+	defer f.Close()
+	for _, p := range f.Progs {
+		if p.Type == elf.PT_INTERP {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+// CLIRejectsSharedExtensions is true only when routa positively determined the
+// selected CLI cannot load shared extensions, so callers never warn on a guess.
+func CLIRejectsSharedExtensions(spec string) bool {
+	supported, known := SupportsSharedExtensions(BinPath(spec))
+	return known && !supported
 }
 
 func InstalledVersions() ([]Installed, error) {

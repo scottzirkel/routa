@@ -291,6 +291,9 @@ var phpPcovOnCmd = &cobra.Command{
 			scope = "CLI and FPM"
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "enabled pcov for PHP %s (%s)\n", spec, scope)
+		if php.CLIRejectsSharedExtensions(spec) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "%s", sharedExtensionUnsupportedHint(spec))
+		}
 		warnXdebugAlsoCollectsCoverage(cmd, spec)
 		return applyPHPINIChange(cmd, spec)
 	},
@@ -339,6 +342,8 @@ var phpPcovStatusCmd = &cobra.Command{
 		switch {
 		case !status.Available:
 			fmt.Fprintf(cmd.OutOrStdout(), "pcov is not available in PHP %s\n", spec)
+		case !status.Loadable:
+			fmt.Fprintf(cmd.OutOrStdout(), "pcov cannot load in PHP %s\n", spec)
 		case status.Enabled:
 			fmt.Fprintf(cmd.OutOrStdout(), "pcov is enabled for PHP %s\n", spec)
 		default:
@@ -347,6 +352,8 @@ var phpPcovStatusCmd = &cobra.Command{
 		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
 		fmt.Fprintln(w, "KEY\tVALUE")
 		fmt.Fprintf(w, "available\t%t\n", status.Available)
+		fmt.Fprintf(w, "loadable\t%t\n", status.Loadable)
+		fmt.Fprintf(w, "cli\t%s\n", php.BinPath(spec))
 		fmt.Fprintf(w, "enabled\t%t\n", status.Enabled)
 		fmt.Fprintf(w, "%s\t%s\n", php.ExtensionKey, valueOrDefault(status.Extension, "(unset)"))
 		scope := "per-SAPI default"
@@ -356,8 +363,25 @@ var phpPcovStatusCmd = &cobra.Command{
 		fmt.Fprintf(w, "%s (cli)\t%s\n", php.PcovEnabledKey, valueOrDefault(status.CLIEnabled, "(unset)"))
 		fmt.Fprintf(w, "%s (fpm)\t%s\n", php.PcovEnabledKey, valueOrDefault(status.FPMEnabled, "(unset)"))
 		fmt.Fprintf(w, "source\t%s\n", scope)
-		return w.Flush()
+		if err := w.Flush(); err != nil {
+			return err
+		}
+		if status.Available && !status.Loadable {
+			fmt.Fprintf(cmd.ErrOrStderr(), "\n%s", sharedExtensionUnsupportedHint(spec))
+		}
+		return nil
 	},
+}
+
+// sharedExtensionUnsupportedHint explains the one failure that no amount of ini
+// editing fixes: the upstream builds link glibc statically, and Linux will not
+// dlopen into such a binary, so the .so is present and simply cannot be loaded.
+func sharedExtensionUnsupportedHint(spec string) string {
+	return fmt.Sprintf(
+		"warning: the CLI for PHP %s links libc statically and cannot load shared extensions.\n"+
+			"  %s\n"+
+			"  Install a dynamically-linked CLI as %s in the same bin/ directory to enable it.\n",
+		spec, php.BinPath(spec), php.DynamicCLIName)
 }
 
 // warnXdebugAlsoCollectsCoverage flags the redundant case: PHPUnit picks pcov

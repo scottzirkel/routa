@@ -72,6 +72,9 @@ type PcovStatus struct {
 	// Pinned is true when pcov.enabled is set explicitly rather than left to
 	// the per-SAPI default.
 	Pinned bool
+	// Loadable is false only when the selected CLI provably cannot dlopen a
+	// shared extension, which makes every other field here moot.
+	Loadable bool
 }
 
 func LaravelINISettings() []INISetting {
@@ -265,7 +268,10 @@ func EnsurePcovEnabledIfAvailable(spec string) (bool, error) {
 
 func PcovINIStatus(spec string, modules []string) (PcovStatus, error) {
 	loaded := moduleLoaded(modules, "pcov")
-	status := PcovStatus{Available: loaded || PcovExtension.Available(spec)}
+	status := PcovStatus{
+		Available: loaded || PcovExtension.Available(spec),
+		Loadable:  loaded || !CLIRejectsSharedExtensions(spec),
+	}
 	settings, err := EffectiveINISettings(spec)
 	if err != nil {
 		return status, err
@@ -295,7 +301,7 @@ func PcovINIStatus(spec string, modules []string) (PcovStatus, error) {
 			status.FPMEnabled = value
 		}
 	}
-	status.Enabled = status.Available && (loaded || status.Extension != "") && status.CLIEnabled != "0"
+	status.Enabled = status.Available && status.Loadable && (loaded || status.Extension != "") && status.CLIEnabled != "0"
 	return status, nil
 }
 
