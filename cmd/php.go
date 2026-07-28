@@ -827,6 +827,7 @@ type phpCLIContext struct {
 	Spec      string
 	Bin       string
 	INIDir    string
+	ShimDir   string
 	SiteNames []string
 }
 
@@ -878,10 +879,15 @@ func currentPHPContext() (*phpCLIContext, error) {
 	if err != nil {
 		return nil, err
 	}
+	shimDir, err := php.WriteCLIShim(spec)
+	if err != nil {
+		return nil, err
+	}
 	return &phpCLIContext{
 		Spec:      spec,
 		Bin:       bin,
 		INIDir:    iniDir,
+		ShimDir:   shimDir,
 		SiteNames: siteNames,
 	}, nil
 }
@@ -946,7 +952,12 @@ func (e childExitError) ExitCode() int {
 }
 
 func envWithRoutaPHP(ctx *phpCLIContext) []string {
+	// The shim must come first: the real bin dir also holds the stock php, and
+	// whichever lands earlier on PATH is what subprocesses actually run.
 	phpDir := filepath.Dir(ctx.Bin)
+	if ctx.ShimDir != "" {
+		phpDir = ctx.ShimDir + string(os.PathListSeparator) + phpDir
+	}
 	env := os.Environ()
 	pathSet := false
 	binarySet := false

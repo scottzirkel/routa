@@ -351,6 +351,30 @@ func moduleLoaded(modules []string, want string) bool {
 	return false
 }
 
+// WriteCLIShim creates a directory whose only php is the CLI routa selected.
+// Subprocesses resolve `php` from PATH — composer, vendor/bin shebangs, composer
+// scripts — and putting the real bin/ on PATH hands them the stock php sitting
+// next to the dynamic one. They would then read PHPRC, find a shared extension
+// they cannot load, and fail on every invocation.
+func WriteCLIShim(spec string) (string, error) {
+	target := BinPath(spec)
+	dir := filepath.Join(paths.RunDir(), "php-cli-"+spec, "bin")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	link := filepath.Join(dir, "php")
+	if current, err := os.Readlink(link); err == nil && current == target {
+		return dir, nil
+	}
+	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	if err := os.Symlink(target, link); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
 func WriteCLIConfig(spec string) (string, error) {
 	settings, err := RenderedINISettings(spec, SAPICLI)
 	if err != nil {

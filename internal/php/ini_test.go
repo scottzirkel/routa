@@ -554,3 +554,46 @@ func TestModeIncludesCoverage(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteCLIShimShadowsTheStockPHPOnPath(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	binDir := filepath.Join(os.Getenv("XDG_DATA_HOME"), "routa", "php", "8.4", "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stock := filepath.Join(binDir, "php")
+	if err := os.WriteFile(stock, []byte("stock"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	shimDir, err := WriteCLIShim("8.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The shim directory must contain php and nothing that could shadow it.
+	entries, err := os.ReadDir(shimDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "php" {
+		t.Fatalf("shim dir contents = %v, want exactly [php]", entries)
+	}
+	if got, err := os.Readlink(filepath.Join(shimDir, "php")); err != nil || got != stock {
+		t.Fatalf("shim target = %q (err %v), want %q", got, err, stock)
+	}
+
+	// Installing a dynamic CLI must re-point the shim, otherwise subprocesses
+	// keep resolving php to the stock build that cannot load pcov.
+	dynamic := filepath.Join(binDir, DynamicCLIName)
+	if err := os.WriteFile(dynamic, []byte("dynamic"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteCLIShim("8.4"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.Readlink(filepath.Join(shimDir, "php")); err != nil || got != dynamic {
+		t.Fatalf("shim target = %q (err %v), want the dynamic CLI %q", got, err, dynamic)
+	}
+}
