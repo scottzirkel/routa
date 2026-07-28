@@ -31,6 +31,13 @@ func DriversDir() string {
 	return filepath.Join(ConfigDir(), "Drivers")
 }
 
+// UserBinDir is where install.sh puts the routa binary, and the conventional
+// place for user executables to shadow system ones.
+func UserBinDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "bin")
+}
+
 func SystemdUserDir() string {
 	return filepath.Join(xdg("XDG_CONFIG_HOME", ".config"), "systemd", "user")
 }

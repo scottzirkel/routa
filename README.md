@@ -98,6 +98,7 @@ routa php ini set 8.4 post_max_size 128M
 routa php ext list [8.4]
 routa php xdebug install [8.4] / on [8.4] / off [8.4] / status [8.4]
 routa php pcov install [8.4] / on [8.4] / off [8.4] / status [8.4]
+routa php shim install / uninstall / status
 routa track / untrack / ignore / unignore / link / unlink / alias / unalias / isolate / secure
 routa proxy <name> <port>       # reverse-proxy <name>.test → 127.0.0.1:<port>
 routa dev [name]                # run a detected dev server and proxy it
@@ -309,6 +310,32 @@ bin/spc-gnu-docker download --with-php=8.4.20 --for-extensions="<exts>,pcov" --p
 bin/spc-gnu-docker build "<exts>" --build-cli --build-shared=pcov
 cp buildroot/bin/php ~/.local/share/routa/php/8.4.20/bin/php-dynamic
 ```
+
+## Making scripts and editors use routa's PHP
+
+`routa php` and `routa composer` are proxies: they only apply when you type
+`routa` first. A shell alias such as `alias php="routa php"` looks like it fixes
+that, but aliases exist only inside an interactive shell. Anything with a
+`#!/usr/bin/env php` line — `vendor/bin/pest`, `vendor/bin/phpunit`, `composer`,
+your editor's test runner — never sees it and silently runs whatever `php` your
+`PATH` finds first, usually the system PHP with a different version and
+extension set than the one serving your sites.
+
+`routa php shim install` writes a real `php` executable into `~/.local/bin` that
+forwards to `routa php`, so those scripts resolve to the same PHP routa runs:
+
+```bash
+routa php shim install
+routa php shim status
+```
+
+Because it is a file rather than an alias, it applies everywhere — scripts,
+editors, subprocesses. It still resolves the version per directory, so a site
+pinned to 8.3 gets 8.3. Once installed, an `alias php="routa php"` is redundant.
+
+`status` reports which `php` scripts will actually run and warns when something
+earlier on your `PATH` shadows the shim. `uninstall` removes it, and neither
+command touches a `php` that routa did not create unless you pass `--force`.
 
 ## Custom docroot
 
