@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/scottzirkel/routa/internal/paths"
 	"github.com/scottzirkel/routa/internal/php"
@@ -575,7 +575,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.results = map[string]probeResult{}
 		m.docExists = checkDocs(m.sites)
 		return m, tea.Batch(m.probeAll(), healthCmd(), servicesCmd(), m.logPreviewSelected(), refreshTickCmd())
-	case tea.KeyMsg:
+	case tea.PasteMsg:
+		// Both text inputs are single-line, so drop the line breaks a pasted
+		// path or name usually carries.
+		text := strings.NewReplacer("\r", "", "\n", "").Replace(msg.Content)
+		switch {
+		case m.rootEdit != nil:
+			m.rootEdit.value += text
+		case m.searching:
+			m.filt.search += text
+			m.resetCursor()
+		}
+		return m, nil
+	case tea.KeyPressMsg:
 		if m.help {
 			switch msg.String() {
 			case "?", "esc":
@@ -597,38 +609,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.rootEdit != nil {
-			switch msg.Type {
-			case tea.KeyEsc:
+			switch msg.String() {
+			case "esc":
 				m.rootEdit = nil
-			case tea.KeyEnter:
+			case "enter":
 				return m.commitRootEdit()
-			case tea.KeyBackspace:
+			case "backspace":
 				if len(m.rootEdit.value) > 0 {
 					m.rootEdit.value = m.rootEdit.value[:len(m.rootEdit.value)-1]
 				}
-			case tea.KeyRunes, tea.KeySpace:
-				m.rootEdit.value += string(msg.Runes)
+			default:
+				m.rootEdit.value += msg.Text
 			}
 			return m, nil
 		}
 		// search-input mode: capture keystrokes into the filter string
 		if m.searching {
-			switch msg.Type {
-			case tea.KeyEsc:
+			switch msg.String() {
+			case "esc":
 				m.searching = false
 				m.filt.search = ""
 				m.resetCursor()
-			case tea.KeyEnter:
+			case "enter":
 				m.searching = false
 				m.resetCursor()
-			case tea.KeyBackspace:
+			case "backspace":
 				if len(m.filt.search) > 0 {
 					m.filt.search = m.filt.search[:len(m.filt.search)-1]
 					m.resetCursor()
 				}
-			case tea.KeyRunes, tea.KeySpace:
-				m.filt.search += string(msg.Runes)
-				m.resetCursor()
+			default:
+				if msg.Text != "" {
+					m.filt.search += msg.Text
+					m.resetCursor()
+				}
 			}
 			return m, nil
 		}
@@ -713,7 +727,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "sort: " + m.sort.label()
 			m.resetCursor()
 			return m, m.logPreviewSelected()
-		case " ":
+		case "space":
 			if root := m.selectedRoot(); root != "" {
 				if m.collapsed == nil {
 					m.collapsed = map[string]bool{}
@@ -1334,7 +1348,13 @@ func (m model) visibleRows() int {
 
 // --- View ----------------------------------------------------------------
 
-func (m model) View() string {
+func (m model) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	return v
+}
+
+func (m model) render() string {
 	if m.width == 0 {
 		return "loading…"
 	}
@@ -2121,7 +2141,7 @@ func Run() error {
 	} else {
 		m.serviceErr = err.Error()
 	}
-	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
+	_, err = tea.NewProgram(m).Run()
 	return err
 }
 
@@ -2149,7 +2169,9 @@ func DebugRender(width int) string {
 	} else {
 		m.serviceErr = err.Error()
 	}
-	return m.View()
+	// Styles render at full color; Sprint downsamples to what stdout supports,
+	// and strips color entirely when the output is piped.
+	return lipgloss.Sprint(m.render())
 }
 
 func siteURL(name string) string {

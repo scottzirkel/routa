@@ -7,7 +7,8 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/scottzirkel/routa/internal/paths"
 	"github.com/scottzirkel/routa/internal/services"
@@ -155,7 +156,8 @@ func TestRenderServicesShowsStatusPortAndDataDir(t *testing.T) {
 		Active:  true,
 	}}}
 
-	got := strings.Join(m.renderServices(80), "\n")
+	// Styles always render at full color; compare the visible text.
+	got := ansi.Strip(strings.Join(m.renderServices(80), "\n"))
 	for _, want := range []string{"OPTIONAL SERVICES", "up", "mysql 8.0/app 3310", "/tmp/routa/services/mysql/8.0/instances/app"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rendered services missing %q:\n%s", want, got)
@@ -206,20 +208,75 @@ func TestServiceActionKeysCreateConfirmation(t *testing.T) {
 		Unit: services.RedisUnitName,
 	}}}
 
-	updated, _ := m.Update(keyRunes("v"))
+	updated, _ := m.Update(keyPress("v"))
 	got := updated.(model)
 	if got.confirm == nil || got.confirm.kind != actionServiceStart || got.confirm.service.Name != "redis" {
 		t.Fatalf("toggle confirm = %#v", got.confirm)
 	}
 
 	m.services[0].Active = true
-	updated, _ = m.Update(keyRunes("V"))
+	updated, _ = m.Update(keyPress("V"))
 	got = updated.(model)
 	if got.confirm == nil || got.confirm.kind != actionServiceRestart || got.confirm.service.Name != "redis" {
 		t.Fatalf("restart confirm = %#v", got.confirm)
 	}
 }
 
-func keyRunes(s string) tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+func TestSpaceTogglesGroupCollapse(t *testing.T) {
+	m := model{
+		sites: []site.Resolved{
+			{Name: "app", Kind: site.KindStatic},
+			{Name: "api.app", Kind: site.KindStatic},
+		},
+		docExists: map[string]bool{"app": true, "api.app": true},
+		results:   map[string]probeResult{},
+		collapsed: map[string]bool{},
+	}
+
+	updated, _ := m.Update(keyPress(" "))
+
+	if !updated.(model).collapsed["app"] {
+		t.Fatal("space should collapse the selected group")
+	}
+}
+
+func TestSearchAcceptsTypedAndPastedText(t *testing.T) {
+	m := model{searching: true}
+	for _, msg := range []tea.Msg{
+		keyPress("a"),
+		keyPress(" "),
+		tea.PasteMsg{Content: "api\n"},
+		tea.KeyPressMsg{Code: tea.KeyBackspace},
+	} {
+		updated, _ := m.Update(msg)
+		m = updated.(model)
+	}
+
+	if m.filt.search != "a ap" {
+		t.Fatalf("search = %q, want %q", m.filt.search, "a ap")
+	}
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if updated.(model).searching {
+		t.Fatal("enter should leave search mode")
+	}
+}
+
+func TestRootEditAcceptsPastedPath(t *testing.T) {
+	m := model{rootEdit: &rootEditState{}}
+
+	updated, _ := m.Update(tea.PasteMsg{Content: "/srv/app\n"})
+	updated, _ = updated.Update(keyPress("2"))
+
+	if got := updated.(model).rootEdit.value; got != "/srv/app2" {
+		t.Fatalf("root edit = %q, want %q", got, "/srv/app2")
+	}
+}
+
+// keyPress builds the press a terminal reports for one printable key, with
+// " " standing for the space bar.
+func keyPress(s string) tea.KeyPressMsg {
+	if s == " " {
+		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+	}
+	return tea.KeyPressMsg{Code: []rune(s)[0], Text: s}
 }
