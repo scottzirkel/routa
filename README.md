@@ -536,6 +536,7 @@ routa db install postgres 16
 routa db start postgres 16 on 5433
 routa db start postgres 16 reporting on 5434
 routa db list
+routa db repair mysql 8.0 affiliate-platform
 ```
 
 Database services are version-isolated and run as systemd user services, so
@@ -559,6 +560,32 @@ and version, such as `routa-mysql@8.0_affiliate-platform.service` with data
 under `~/.local/share/routa/services/mysql/8.0/instances/affiliate-platform/`.
 routa initializes missing data directories with the distro-provided init tools
 and does not delete database data.
+
+### Stale socket locks
+
+A database server killed without a clean shutdown leaves its socket lock, pid
+file, and socket behind. The lock names the pid of the server that wrote it, and
+mysqld and mariadbd refuse to start while that pid is alive — so once the kernel
+recycles the pid onto an unrelated process, the lock looks live forever and the
+service fails on every start.
+
+routa checks those files before each start, both from `routa db start` and from
+an `ExecStartPre=` line in the unit, so a systemd restart recovers on its own. A
+file is only cleared when its pid is gone or belongs to a process that is not
+this instance's server; files held by a live server are always left alone. Each
+database unit also carries `StartLimitIntervalSec=60` and `StartLimitBurst=5`,
+so a server that cannot start lands in `failed` after a few attempts instead of
+restarting indefinitely.
+
+`routa doctor` reports stale runtime files on an inactive database service and
+flags any unit systemd has restarted repeatedly. To clear them by hand:
+
+```bash
+routa db repair mysql 8.0 affiliate-platform
+```
+
+Units written before this check gain it the next time `routa db start` runs for
+that instance.
 
 MySQL starts with an empty local `root` password for routa management. Pass
 `--user` and `--password` to `install` or `start` to save application

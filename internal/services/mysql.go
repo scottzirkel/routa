@@ -23,10 +23,12 @@ const (
 const mysqlUnitTmpl = `[Unit]
 Description=routa MySQL {{.Version}}
 After=network.target
+{{.StartLimit}}
 
 [Service]
 Type=simple
-ExecStart={{.Binary}} --defaults-file={{.ConfigPath}}
+{{if .RepairExec}}{{.RepairExec}}
+{{end}}ExecStart={{.Binary}} --defaults-file={{.ConfigPath}}
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=30
@@ -57,6 +59,8 @@ type mysqlUnitData struct {
 	Version    string
 	Binary     string
 	ConfigPath string
+	StartLimit string
+	RepairExec string
 }
 
 type mysqlConfigData struct {
@@ -178,6 +182,8 @@ func RenderMySQLUnitForInstance(version, instance, binary string) (string, error
 		Version:    version,
 		Binary:     binary,
 		ConfigPath: MySQLConfigPathForInstance(version, instance),
+		StartLimit: unitStartLimit,
+		RepairExec: databaseRepairExec("mysql", version, instance),
 	})
 }
 

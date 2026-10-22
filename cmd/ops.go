@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -540,16 +541,21 @@ func doctorServiceStatus(unit string, isActive func(string) ([]byte, error)) doc
 }
 
 type optionalServiceDoctorSpec struct {
-	Kind    string
-	Version string
-	Binary  string
-	Ports   []optionalServiceDoctorPort
+	Kind     string
+	Version  string
+	Instance string
+	Binary   string
+	Ports    []optionalServiceDoctorPort
 }
 
 type optionalServiceDoctorPort struct {
 	Label string
 	Port  string
 }
+
+// doctorRestartLoopThreshold is the restart count above which a unit is worth
+// reporting as looping rather than as having recovered from a one-off failure.
+const doctorRestartLoopThreshold = 3
 
 var (
 	doctorSharedLibraryRE = regexp.MustCompile(`error while loading shared libraries: ([^:]+):`)
@@ -559,6 +565,12 @@ var (
 
 func optionalServiceDoctorDetail(unit string, active bool, status string) string {
 	spec, details := optionalServiceDoctorSpecForUnit(unit)
+	if detail := serviceRestartLoopDetail(unit, active, systemctlUserProperty); detail != "" {
+		details = append(details, detail)
+	}
+	if !active {
+		details = append(details, databaseRuntimeDoctorDetails(spec)...)
+	}
 	if strings.TrimSpace(status) == "failed" {
 		details = append(details, "inspect logs with `journalctl --user -u "+unit+" -n 100 --no-pager`")
 	}
@@ -624,14 +636,17 @@ func optionalServiceDoctorSpecForUnit(unit string) (optionalServiceDoctorSpec, [
 	case strings.HasPrefix(unit, "routa-mariadb@"):
 		version, instance := doctorDatabaseVersionInstance(unit, "routa-mariadb@")
 		spec.Version = version
+		spec.Instance = instance
 		addConfigPort("MariaDB", services.MariaDBConfigPathForInstance(version, instance), services.MariaDBDefaultPort)
 	case strings.HasPrefix(unit, "routa-mysql@"):
 		version, instance := doctorDatabaseVersionInstance(unit, "routa-mysql@")
 		spec.Version = version
+		spec.Instance = instance
 		addConfigPort("MySQL", services.MySQLConfigPathForInstance(version, instance), services.MySQLDefaultPort)
 	case strings.HasPrefix(unit, "routa-postgres@"):
 		version, instance := doctorDatabaseVersionInstance(unit, "routa-postgres@")
 		spec.Version = version
+		spec.Instance = instance
 		addConfigPort("Postgres", services.PostgresConfigPathForInstance(version, instance), services.PostgresDefaultPort)
 	case strings.HasPrefix(unit, "routa-meilisearch@"):
 		spec.Version = strings.TrimSuffix(strings.TrimPrefix(unit, "routa-meilisearch@"), ".service")
@@ -668,6 +683,61 @@ func optionalServiceKind(unit string) string {
 		return "minio"
 	}
 	return ""
+}
+
+// databaseRuntimeDoctorDetails reports socket, lock, and pid files left behind
+// by a database server that is no longer running. mysqld and mariadbd refuse to
+// start while a socket lock names a live pid, and once the recorded pid has been
+// recycled by an unrelated process the lock never expires on its own.
+func databaseRuntimeDoctorDetails(spec optionalServiceDoctorSpec) []string {
+	switch spec.Kind {
+	case "mysql", "mariadb", "postgres":
+	default:
+		return nil
+	}
+	state, err := services.InspectDatabaseRuntime(spec.Kind, spec.Version, spec.Instance)
+	if err != nil {
+		return []string{"could not inspect " + spec.Kind + " runtime files: " + err.Error()}
+	}
+	var details []string
+	for _, file := range state.Unverified {
+		details = append(details, fmt.Sprintf("%s names pid %d that %s, so routa left it in place", file.Path, file.PID, file.Reason))
+	}
+	if !state.Blocked() {
+		return details
+	}
+	stale := make([]string, 0, len(state.Stale))
+	for _, file := range state.Stale {
+		stale = append(stale, file.String())
+	}
+	return append(details, "stale runtime files block startup: "+strings.Join(stale, ", ")+
+		"; clear them with `"+databaseRepairCommand(spec)+"`")
+}
+
+func databaseRepairCommand(spec optionalServiceDoctorSpec) string {
+	cmd := "routa db repair " + spec.Kind + " " + spec.Version
+	if spec.Instance != "" {
+		cmd += " " + spec.Instance
+	}
+	return cmd
+}
+
+// serviceRestartLoopDetail flags a unit systemd has restarted repeatedly, the
+// symptom of a server that fails the same way on every start. The count resets
+// when the unit is started by hand, so it describes the current run.
+func serviceRestartLoopDetail(unit string, active bool, show func(unit, property string) ([]byte, error)) string {
+	out, err := show(unit, "NRestarts")
+	if err != nil {
+		return ""
+	}
+	restarts, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || restarts < doctorRestartLoopThreshold {
+		return ""
+	}
+	if active {
+		return fmt.Sprintf("systemd has restarted this unit %d times since it was last started by hand", restarts)
+	}
+	return fmt.Sprintf("systemd has restarted this unit %d times; it is failing on every start", restarts)
 }
 
 func readRoutaUnit(unit string) (string, error) {
@@ -856,6 +926,10 @@ func serviceActive(services []doctorService, name string) bool {
 
 func systemctlUserIsActive(unit string) ([]byte, error) {
 	return exec.Command("systemctl", "--user", "is-active", unit).CombinedOutput()
+}
+
+func systemctlUserProperty(unit, property string) ([]byte, error) {
+	return exec.Command("systemctl", "--user", "show", "-p", property, "--value", unit).Output()
 }
 
 func renderDoctorText(cmd *cobra.Command, report doctorReport) error {

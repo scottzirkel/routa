@@ -19,10 +19,12 @@ const (
 const mariadbUnitTmpl = `[Unit]
 Description=routa MariaDB {{.Version}}
 After=network.target
+{{.StartLimit}}
 
 [Service]
 Type=simple
-ExecStart={{.Binary}} --defaults-file={{.ConfigPath}}
+{{if .RepairExec}}{{.RepairExec}}
+{{end}}ExecStart={{.Binary}} --defaults-file={{.ConfigPath}}
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=30
@@ -48,6 +50,8 @@ type mariadbUnitData struct {
 	Version    string
 	Binary     string
 	ConfigPath string
+	StartLimit string
+	RepairExec string
 }
 
 type mariadbConfigData struct {
@@ -160,6 +164,8 @@ func RenderMariaDBUnitForInstance(version, instance, binary string) (string, err
 		Version:    version,
 		Binary:     binary,
 		ConfigPath: MariaDBConfigPathForInstance(version, instance),
+		StartLimit: unitStartLimit,
+		RepairExec: databaseRepairExec("mariadb", version, instance),
 	})
 }
 

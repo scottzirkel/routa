@@ -80,6 +80,9 @@ var dbStartCmd = &cobra.Command{
 		if err := ensureDatabase(cmd, target.Engine, target.Version, target.Instance, port); err != nil {
 			return err
 		}
+		if err := repairDatabaseRuntime(cmd, target.Engine, target.Version, target.Instance, false); err != nil {
+			return err
+		}
 		if err := systemd.EnableNow(unit); err != nil {
 			return fmt.Errorf("start %s: %w", unit, err)
 		}
@@ -89,6 +92,56 @@ var dbStartCmd = &cobra.Command{
 		fmt.Fprintf(cmd.OutOrStdout(), "started %s\n", unit)
 		return nil
 	},
+}
+
+var dbRepairCmd = &cobra.Command{
+	Use:   "repair <engine> <version> [instance]",
+	Short: "Clear stale socket, lock, and pid files left behind by a crashed database server",
+	Args:  dbEngineVersionInstanceArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		target, _, err := databaseTargetFromArgs(cmd, args, false)
+		if err != nil {
+			return err
+		}
+		return repairDatabaseRuntime(cmd, target.Engine, target.Version, target.Instance, true)
+	},
+}
+
+// repairDatabaseRuntime clears the runtime files of a database instance whose
+// server is gone. A server killed without cleanup leaves a socket lock naming
+// its pid; once that pid is recycled the lock looks live and the server refuses
+// to start against it forever. Each unit runs this from ExecStartPre, so it has
+// to succeed quietly when there is nothing to clear.
+func repairDatabaseRuntime(cmd *cobra.Command, engine, version, instance string, verbose bool) error {
+	state, err := services.InspectDatabaseRuntime(engine, version, instance)
+	if err != nil {
+		return err
+	}
+	unit := databaseUnitName(engine, version, instance)
+	out := cmd.OutOrStdout()
+	if state.OwnerPID != 0 {
+		if verbose {
+			fmt.Fprintf(out, "%s is already running as pid %d; left its runtime files alone\n", unit, state.OwnerPID)
+		}
+		return nil
+	}
+	for _, file := range state.Unverified {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: pid %d %s; leaving %s in place\n", file.PID, file.Reason, file.Path)
+	}
+	removed, err := state.Clear()
+	if err != nil {
+		return err
+	}
+	if len(removed) == 0 {
+		if verbose {
+			fmt.Fprintf(out, "no stale runtime files for %s\n", unit)
+		}
+		return nil
+	}
+	for _, file := range removed {
+		fmt.Fprintf(out, "cleared stale %s\n", file)
+	}
+	return nil
 }
 
 var dbStopCmd = &cobra.Command{
@@ -406,6 +459,6 @@ func init() {
 	dbStartCmd.Flags().StringVar(&dbStartPassword, "password", "", "database application password")
 	dbCredentialsCmd.Flags().StringVar(&dbCredentialsUser, "user", "", "database application user")
 	dbCredentialsCmd.Flags().StringVar(&dbCredentialsPassword, "password", "", "database application password")
-	dbCmd.AddCommand(dbInstallCmd, dbStartCmd, dbStopCmd, dbStatusCmd, dbListCmd, dbCredentialsCmd)
+	dbCmd.AddCommand(dbInstallCmd, dbStartCmd, dbStopCmd, dbStatusCmd, dbListCmd, dbCredentialsCmd, dbRepairCmd)
 	rootCmd.AddCommand(dbCmd)
 }

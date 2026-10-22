@@ -19,10 +19,12 @@ const (
 const postgresUnitTmpl = `[Unit]
 Description=routa Postgres {{.Version}}
 After=network.target
+{{.StartLimit}}
 
 [Service]
 Type=simple
-ExecStart={{.Binary}} -D {{.DataDir}} -c config_file={{.ConfigPath}}
+{{if .RepairExec}}{{.RepairExec}}
+{{end}}ExecStart={{.Binary}} -D {{.DataDir}} -c config_file={{.ConfigPath}}
 StandardOutput=append:{{.LogPath}}
 StandardError=append:{{.LogPath}}
 Restart=on-failure
@@ -47,6 +49,8 @@ type postgresUnitData struct {
 	DataDir    string
 	ConfigPath string
 	LogPath    string
+	StartLimit string
+	RepairExec string
 }
 
 type postgresConfigData struct {
@@ -151,6 +155,8 @@ func RenderPostgresUnitForInstance(version, instance, binary string) (string, er
 		DataDir:    PostgresDataDirForInstance(version, instance),
 		ConfigPath: PostgresConfigPathForInstance(version, instance),
 		LogPath:    PostgresLogPathForInstance(version, instance),
+		StartLimit: unitStartLimit,
+		RepairExec: databaseRepairExec("postgres", version, instance),
 	})
 }
 

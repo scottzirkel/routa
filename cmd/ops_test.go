@@ -216,6 +216,61 @@ func TestOptionalServiceDoctorDetailReportsMySQLMariaDBMismatch(t *testing.T) {
 	}
 }
 
+func TestOptionalServiceDoctorDetailReportsStaleSocketLock(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	pidMax, err := os.ReadFile("/proc/sys/kernel/pid_max")
+	if err != nil {
+		t.Skipf("cannot read pid_max: %v", err)
+	}
+	deadPID := strings.TrimSpace(string(pidMax))
+
+	unit := services.MySQLUnitNameForInstance("8.0", "affiliate")
+	writeFile(t, services.MySQLConfigPathForInstance("8.0", "affiliate"), "port=3309\n")
+	writeFile(t, filepath.Join(paths.SystemdUserDir(), unit), "[Service]\nExecStart=/tmp/routa-missing-mysqld\n")
+	writeFile(t, services.MySQLSocketPathForInstance("8.0", "affiliate")+".lock", deadPID+"\n")
+
+	got := optionalServiceDoctorDetail(unit, false, "failed")
+
+	for _, want := range []string{
+		"stale runtime files block startup",
+		"pid " + deadPID + " is gone",
+		"routa db repair mysql 8.0 affiliate",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("detail missing %q: %s", want, got)
+		}
+	}
+}
+
+func TestServiceRestartLoopDetailReportsRepeatedRestarts(t *testing.T) {
+	show := func(unit, property string) ([]byte, error) {
+		if property != "NRestarts" {
+			t.Fatalf("property = %q", property)
+		}
+		return []byte("363\n"), nil
+	}
+
+	got := serviceRestartLoopDetail("routa-mysql@8.0_affiliate.service", false, show)
+
+	if !strings.Contains(got, "restarted this unit 363 times; it is failing on every start") {
+		t.Fatalf("detail = %q", got)
+	}
+	if recovered := serviceRestartLoopDetail("routa-mysql@8.0_affiliate.service", true, show); !strings.Contains(recovered, "since it was last started by hand") {
+		t.Fatalf("active detail = %q", recovered)
+	}
+}
+
+func TestServiceRestartLoopDetailStaysQuietForOccasionalRestarts(t *testing.T) {
+	show := func(string, string) ([]byte, error) { return []byte("1\n"), nil }
+
+	if got := serviceRestartLoopDetail("routa-mysql@8.0.service", false, show); got != "" {
+		t.Fatalf("detail = %q, want empty", got)
+	}
+}
+
 func TestCaddyAddrLabelReportsLikelyPortOwnerConflict(t *testing.T) {
 	got := caddyAddrLabel(true, false, false)
 
