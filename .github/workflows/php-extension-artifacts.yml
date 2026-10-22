@@ -6,7 +6,7 @@ on:
       php_versions:
         description: Space-separated exact PHP versions to build
         required: true
-        default: "8.2.30 8.3.30 8.4.20 8.5.5"
+        default: "8.2.32 8.3.32 8.4.23 8.5.8"
       release_tag:
         description: GitHub release tag that stores PHP shared-extension artifacts
         required: true
@@ -31,7 +31,7 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check Docker
         run: docker version

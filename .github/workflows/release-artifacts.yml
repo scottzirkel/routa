@@ -11,13 +11,19 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      # Build with the newest stable Go so each release picks up its security
+      # fixes. The go line in go.mod is only the minimum the code needs, and
+      # setup-go would install exactly that version.
+      - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: stable
+
+      - name: Test
+        run: go test ./...
 
       - name: Build release artifacts
         run: ./scripts/build-release-artifacts.sh "${GITHUB_REF_NAME#v}"

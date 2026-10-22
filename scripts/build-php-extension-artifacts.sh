@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 repo="$PWD"
 
 if (($# == 0)); then
-	versions=(8.2.30 8.3.30 8.4.20 8.5.5)
+	versions=(8.2.32 8.3.32 8.4.23 8.5.8)
 else
 	versions=("$@")
 fi
