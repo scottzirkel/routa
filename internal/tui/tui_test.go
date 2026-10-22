@@ -165,6 +165,14 @@ func TestRenderServicesShowsStatusPortAndDataDir(t *testing.T) {
 	}
 }
 
+func TestModalBoxKeepsStyledLinesWhole(t *testing.T) {
+	box := ansi.Strip(modalBox("HELP", []string{headerStyle.Render("KEYS"), "  q  quit"}, 80))
+
+	if !strings.Contains(box, "│KEYS     │") {
+		t.Fatalf("styled heading was cut short:\n%s", box)
+	}
+}
+
 func TestServiceSelectionWraps(t *testing.T) {
 	m := model{services: []optionalService{
 		{Name: "mysql", Unit: "routa-mysql.service"},

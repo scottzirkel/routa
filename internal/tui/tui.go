@@ -17,6 +17,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/scottzirkel/routa/internal/paths"
 	"github.com/scottzirkel/routa/internal/php"
@@ -2015,7 +2016,8 @@ func modalBox(title string, lines []string, termWidth int) string {
 		ruleStyle.Render("┌" + topLabel + strings.Repeat("─", topFill) + "┐"),
 	}
 	for _, line := range lines {
-		out = append(out, ruleStyle.Render("│")+padVisible(truncate(line, contentW), contentW)+ruleStyle.Render("│"))
+		// Lines may carry styling, so cut by visible width rather than runes.
+		out = append(out, ruleStyle.Render("│")+padVisible(ansi.Truncate(line, contentW, "…"), contentW)+ruleStyle.Render("│"))
 	}
 	out = append(out, ruleStyle.Render("└"+strings.Repeat("─", contentW)+"┘"))
 	box := strings.Join(out, "\n")
