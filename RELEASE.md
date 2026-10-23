@@ -97,12 +97,10 @@ The initial release line was reconstructed from the first commits:
 - `v1.9.0`: compact database list output with configured ports, clearer doctor cutover wording, safer dev-server port parsing, Mailpit/search status listen-address headers, and expanded routing/rendering coverage.
 - `v1.10.0`: current-site PHP Xdebug, extension, and ini inspection workflows; optional service port output polish for Mailpit, search, and storage; stateful service backup guidance; Mailpit tag/plus-address inbox guidance; longer local TLS certificates; and more routing edge coverage.
 - `v1.11.0`: managed Xdebug shared-extension installs for PHP versions, glibc static-php-cli PHP builds, current/default-aware `routa php xdebug install`, FPM php.ini rendering for Zend extensions, and Xdebug artifact publishing workflow.
+- `v1.12.0`: managed pcov alongside Xdebug from a new `php-extensions` release, detection of PHP builds that cannot load shared extensions, a dynamically-linked PHP CLI build script, a `php` shim so scripts and editors use routa's PHP, `routa status --json`, Valet-compatible drivers and `.routa-env.php`, wildcard subdomain hosts, recovery from stale database socket locks with `routa db repair`, the dashboard on Bubble Tea v2, and release builds on the newest stable Go.
 
 ## Pending Release Notes
 
 ### Next
 
-- PHP sites use stable per-site FPM sockets without copying project `.env` values into generated FPM config, so editing `.env` values no longer requires `routa reload`.
-- Site fragments now include wildcard subdomain hosts like `*.app.test`, while explicit subdomain links and aliases continue to render their own exact host fragments.
-- Valet-compatible PHP drivers are supported via project-local `LocalValetDriver.php`, global `*ValetDriver.php` files in `~/.config/routa/Drivers/`, and the Valet `serves` / `isStaticFile` / `frontControllerPath` method contract.
-- PHP sites can inject request-time `$_SERVER` values from `.routa-env.php`, with `.valet-env.php` supported as a Valet-compatible fallback.
+- None.

@@ -5,6 +5,12 @@ priority, not commitment.
 
 ## Pending release
 
+- None.
+
+## Released
+
+### v1.12.0 — pcov, a php shim, and Valet parity
+
 - **Bundled pcov coverage** — `routa php install` now installs a Routa-managed
   `pcov.so` alongside `xdebug.so`, and `routa php pcov install/on/off/status`
   toggles it. pcov defaults to on, enabled for the CLI and pinned off for
@@ -14,7 +20,8 @@ priority, not commitment.
 - **Generalized extension pipeline** — the Xdebug build script and workflow are
   now extension-agnostic, publishing every managed shared extension to the
   `php-extensions` release while mirroring Xdebug to the legacy `php-xdebug`
-  tag for older installs.
+  tag for older installs. Published and verified for PHP 8.2.32, 8.3.32,
+  8.4.23, and 8.5.8 on `amd64` and `arm64`.
 - **Wildcard subdomains** — site fragments include wildcard hosts such as
   `*.app.test`, while explicit subdomain links and aliases keep their own exact
   host fragments.
@@ -26,8 +33,24 @@ priority, not commitment.
 - **Site-specific server variables** — `.routa-env.php` injects request-time
   `$_SERVER` values using Valet's site-name and `*` map convention, with
   `.valet-env.php` supported as a migration fallback.
-
-## Released
+- **Shared-extension load detection** — routa detects PHP CLI builds that link
+  glibc statically and so can never load a shared extension, reports it in
+  `routa php pcov status`, and prefers a `bin/php-dynamic` CLI when one exists.
+  `scripts/build-php-dynamic-cli.sh` builds that CLI.
+- **php shim** — `routa php shim install` writes a real `php` executable into
+  `~/.local/bin` that forwards to `routa php`, so shebang scripts, Composer,
+  and editor test runners use routa's PHP. `routa php` and `routa composer`
+  also put the selected CLI first on `PATH`.
+- **JSON site listing** — `routa status --json` lists resolved sites for
+  scripts and agents.
+- **Database crash recovery** — MySQL, MariaDB, and Postgres units clear stale
+  socket, lock, and pid files before each start and stop after repeated
+  failures instead of restarting forever. `routa doctor` reports both, and
+  `routa db repair` clears the files by hand.
+- **Dashboard on Bubble Tea v2** — the dashboard moves to Bubble Tea v2 and
+  Lip Gloss v2, and help and dialog headings are no longer cut short.
+- **Current release toolchain** — release builds use the newest stable Go and
+  run the tests first, with current Go dependencies and GitHub Actions.
 
 ### v1.11.0 — Managed Xdebug-capable PHP installs
 
