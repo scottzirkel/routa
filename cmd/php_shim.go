@@ -136,11 +136,15 @@ func shimDir() string {
 	return paths.UserBinDir()
 }
 
+// The shim passes "--" so routa stops reading arguments there: everything after
+// it reaches PHP untouched. Without it, `php list` would run `routa php list`,
+// and the "--" in `curl … | php -- --install-dir=…` would be consumed by routa
+// instead of telling PHP the script comes from stdin.
 func phpShimContent(routaBin string) string {
 	return fmt.Sprintf(`#!/bin/sh
 %s — resolves php to the version routa selects for the current directory.
 # Remove with: routa php shim uninstall
-exec %s php "$@"
+exec %s php -- "$@"
 `, phpShimMarker, shellQuote(routaBin))
 }
 

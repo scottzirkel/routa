@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -16,8 +17,30 @@ func TestPHPShimContentIsExecutableAndQuoted(t *testing.T) {
 		t.Fatalf("shim must carry the marker so uninstall can recognise it:\n%s", content)
 	}
 	// A path with a space must survive, or the shim silently runs the wrong thing.
-	if !strings.Contains(content, `exec '/home/some one/bin/routa' php "$@"`) {
+	if !strings.Contains(content, `exec '/home/some one/bin/routa' php -- "$@"`) {
 		t.Fatalf("shim did not quote the routa path:\n%s", content)
+	}
+}
+
+// The shim's arguments belong to PHP, so they must never reach a routa
+// subcommand, and any "--" of their own must survive.
+func TestPHPShimArgumentsReachPHPUntouched(t *testing.T) {
+	for _, phpArgs := range [][]string{
+		{"list"},
+		{"--", "--install-dir=/tmp/bin", "--filename=composer"},
+		{"-v"},
+	} {
+		shimArgs := append([]string{"php", "--"}, phpArgs...)
+		cmd, args, err := rootCmd.Find(shimArgs)
+		if err != nil {
+			t.Fatalf("Find(%q): %v", shimArgs, err)
+		}
+		if cmd != phpCmd {
+			t.Fatalf("Find(%q) = %q, want the php proxy", shimArgs, cmd.CommandPath())
+		}
+		if got := trimArgSeparator(args); !slices.Equal(got, phpArgs) {
+			t.Fatalf("PHP would receive %q, want %q", got, phpArgs)
+		}
 	}
 }
 
