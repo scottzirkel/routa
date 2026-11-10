@@ -170,3 +170,47 @@ func gitIn(t *testing.T, dir string, args ...string) {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 }
+
+func TestNewWorkspacesStartFromTheRemoteMainBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	base := t.TempDir()
+	remote := filepath.Join(base, "remote")
+	commit := func(dir, msg string) {
+		gitIn(t, dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", msg)
+	}
+	gitIn(t, remote, "init", "-q", "-b", "main")
+	commit(remote, "on main")
+	main := filepath.Join(base, "shop")
+	if out, err := exec.Command("git", "clone", "-q", remote, main).CombinedOutput(); err != nil {
+		t.Fatalf("clone: %v %s", err, out)
+	}
+	// The main checkout has an unmerged feature branch open.
+	gitIn(t, main, "switch", "-q", "-c", "5187-feature")
+	commit(main, "unmerged feature work")
+	// main moves on upstream after the clone.
+	commit(remote, "newer main")
+
+	ref, err := DefaultBase(main)
+	if err != nil || ref != "origin/main" {
+		t.Fatalf("DefaultBase = %q, %v", ref, err)
+	}
+	wt := filepath.Join(base, "shop-5199")
+	if err := AddWorktree(main, wt, "5199", ref); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("git", "-C", wt, "log", "-1", "--format=%s").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "newer main" {
+		t.Fatalf("workspace starts at %q, want the fetched main", out)
+	}
+
+	lonely := filepath.Join(base, "lonely")
+	gitIn(t, lonely, "init", "-q", "-b", "main")
+	commit(lonely, "only commit")
+	if ref, err := DefaultBase(lonely); err != nil || ref != "HEAD" {
+		t.Fatalf("without a remote: %q, %v", ref, err)
+	}
+}

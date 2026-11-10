@@ -80,6 +80,37 @@ func AddWorktree(main, path, branch, from string) error {
 	}
 }
 
+// BranchExists reports whether main has a local branch by that name.
+func BranchExists(main, branch string) bool {
+	return gitOK(main, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+}
+
+// DefaultBase is where a new workspace branch starts when --from is not
+// given: the remote's default branch, such as origin/main, fetched first. A
+// workspace should not quietly carry whatever unmerged branch the main
+// checkout has open. Without a remote it is HEAD. A failed fetch returns the
+// last fetched copy with the error, so callers can warn and go on.
+func DefaultBase(main string) (string, error) {
+	out, err := git(main, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+	ref := strings.TrimSpace(out)
+	if err != nil || ref == "" {
+		ref = ""
+		for _, candidate := range []string{"origin/main", "origin/master"} {
+			if gitOK(main, "rev-parse", "--verify", "--quiet", candidate) {
+				ref = candidate
+				break
+			}
+		}
+	}
+	if ref == "" {
+		return "HEAD", nil
+	}
+	if _, err := git(main, "fetch", "--quiet", "origin", strings.TrimPrefix(ref, "origin/")); err != nil {
+		return ref, err
+	}
+	return ref, nil
+}
+
 // RemoveWorktree removes a worktree. Without force, git refuses when it has
 // changes or untracked files; ignored files such as vendor/ do not count.
 func RemoveWorktree(main, path string, force bool) error {

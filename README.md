@@ -499,7 +499,7 @@ several branches, or several coding agents, can run the same app side by side.
 ```bash
 cd ~/code/shop
 routa workspace add 5194                    # ~/code/shop-5194 with its own copy of the database
-routa workspace add login --branch fix/login --from origin/main
+routa workspace add login --branch fix/login --from HEAD
 routa workspace add 5195 --database empty   # fresh database, migrated
 routa workspace list
 routa workspace rm 5194 --drop-database
@@ -514,7 +514,10 @@ folder. From anywhere else, name the site with `--site`, as in
 `add` creates the worktree beside the repository and serves it at
 `https://shop-5194.test`, with the parent's docroot, PHP version, and HTTPS
 setting. Wildcard hosts cover the app's subdomains, such as
-`app.shop-5194.test`. routa then:
+`app.shop-5194.test`. The new branch starts from the remote's main branch,
+fetched first, so a workspace never carries whatever unmerged branch the main
+checkout has open. Pass `--from HEAD` to start from that branch instead, or
+`--from <ref>` for any other. routa then:
 
 - Copies the parent's ignored files that a working copy needs: `.env` and
   `.env.testing`, dependencies (`vendor/` and `node_modules/` at any depth),

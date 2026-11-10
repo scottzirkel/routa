@@ -113,7 +113,7 @@ func init() {
 	workspaceCmd.PersistentFlags().StringVar(&workspaceSite, "site", "", "site to work on, instead of the one whose repository holds the current folder")
 	workspacePruneCmd.Flags().BoolVar(&workspaceDryRun, "dry-run", false, "list what would be dropped without dropping it")
 	workspaceAddCmd.Flags().StringVar(&workspaceBranch, "branch", "", "branch to create or check out (default: the workspace name)")
-	workspaceAddCmd.Flags().StringVar(&workspaceFrom, "from", "", "commit or branch the new branch starts from (default: HEAD)")
+	workspaceAddCmd.Flags().StringVar(&workspaceFrom, "from", "", "commit or branch the new branch starts from (default: the remote's main branch, fetched first; HEAD for the main checkout's current branch)")
 	workspaceAddCmd.Flags().StringVar(&workspaceDatabase, "database", "clone", "clone or empty")
 	workspaceAddCmd.Flags().StringSliceVar(&workspaceCopy, "copy", nil, "also copy this ignored path from the parent (repeatable)")
 	workspaceListCmd.Flags().BoolVar(&workspaceListJSON, "json", false, "emit machine-readable JSON")
@@ -181,6 +181,14 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 	if branch == "" {
 		branch = args[0]
 	}
+	from := workspaceFrom
+	if from == "" && !workspace.BranchExists(main, branch) {
+		base, err := workspace.DefaultBase(main)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: could not fetch %s, so the branch starts from the last fetched copy: %v\n", base, err)
+		}
+		from = base
+	}
 
 	envContent, err := os.ReadFile(filepath.Join(main, ".env"))
 	if err != nil && !os.IsNotExist(err) {
@@ -191,8 +199,12 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("→ creating worktree %s on branch %s\n", wtPath, branch)
-	if err := workspace.AddWorktree(main, wtPath, branch, workspaceFrom); err != nil {
+	if from != "" {
+		fmt.Printf("→ creating worktree %s on new branch %s from %s\n", wtPath, branch, from)
+	} else {
+		fmt.Printf("→ creating worktree %s on existing branch %s\n", wtPath, branch)
+	}
+	if err := workspace.AddWorktree(main, wtPath, branch, from); err != nil {
 		return err
 	}
 	fail := func(err error) error {
