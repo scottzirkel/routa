@@ -15,7 +15,11 @@ Herd 2 parity work (Herd 2.0 shipped in October 2026 for macOS and Windows).
   the new `.env`, and gives the workspace its own MySQL, MariaDB, Postgres,
   or SQLite database, cloned by default or empty. Workspaces never share the
   parent's database; `add` refuses when it cannot isolate one, and
-  `routa workspace list` flags worktrees that do. `rm` rounds it out.
+  `routa workspace list` flags worktrees that do. MySQL and MariaDB copies
+  stay on the server (schema dump, then `INSERT … SELECT` per table), and
+  `aff_main` copies are named `aff_<name>`. The copied `.env.testing` gets
+  the workspace name on every test database and its own Redis database
+  numbers, and `rm` drops the workspace's test databases.
 - **Git worktree subdomains** — worktrees routa did not create, such as the
   ones coding agents keep inside a repository, are served at
   `<site>-<folder>.test`. Worktrees a tracked directory already serves keep

@@ -82,8 +82,10 @@ func TestDatabaseFromEnvDefaults(t *testing.T) {
 }
 
 func TestCopyName(t *testing.T) {
-	if got, err := CopyName("aff_main", "fix-login"); err != nil || got != "aff_main_fix_login" {
-		t.Fatalf("CopyName = %q, %v", got, err)
+	for parent, want := range map[string]string{"aff_main": "aff_fix_login", "shop": "shop_fix_login", "main": "main_fix_login"} {
+		if got, err := CopyName(parent, "fix-login"); err != nil || got != want {
+			t.Errorf("CopyName(%q) = %q, %v; want %q", parent, got, err, want)
+		}
 	}
 	if _, err := CopyName(strings.Repeat("d", 60), "long-name"); err == nil {
 		t.Fatal("expected an error for a name over 63 characters")

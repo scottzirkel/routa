@@ -173,6 +173,10 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 		}
 		fmt.Printf("→ wrote .env for %s.test\n", newSite)
 	}
+	tests, err := writeWorkspaceTestEnv(main, wtPath, suffix, string(envContent))
+	if err != nil {
+		return fail(err)
+	}
 	if err := db.apply(); err != nil {
 		return fail(err)
 	}
@@ -194,7 +198,48 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 	if db.summary != "" {
 		fmt.Fprintf(w, "  database\t%s\n", db.summary)
 	}
+	if len(tests.Databases) > 0 {
+		fmt.Fprintf(w, "  tests\t%s\n", strings.Join(tests.Databases, ", "))
+	}
+	if len(tests.Redis) > 0 {
+		fmt.Fprintf(w, "  redis\t%s (tests)\n", strings.Join(tests.Redis, ", "))
+	}
 	return w.Flush()
+}
+
+// writeWorkspaceTestEnv gives the workspace its own test databases and Redis
+// databases by editing its copy of .env.testing. A .env.testing that git
+// tracks is left alone, since the edit would show up as a change to commit.
+func writeWorkspaceTestEnv(main, wtPath, suffix, parentEnv string) (workspace.TestEnvPlan, error) {
+	path := filepath.Join(wtPath, ".env.testing")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return workspace.TestEnvPlan{}, nil
+	}
+	if err != nil {
+		return workspace.TestEnvPlan{}, err
+	}
+	if workspace.IsTracked(main, ".env.testing") {
+		fmt.Println("  warning: git tracks .env.testing, so routa left it alone and tests use the parent's test databases")
+		return workspace.TestEnvPlan{}, nil
+	}
+	checkouts := []string{main}
+	if wts, err := workspace.ListWorktrees(main); err == nil {
+		for _, wt := range wts {
+			if filepath.Clean(wt.Path) != filepath.Clean(wtPath) {
+				checkouts = append(checkouts, wt.Path)
+			}
+		}
+	}
+	plan, err := workspace.PlanTestEnv(workspace.ParseEnv(string(data)), workspace.ParseEnv(parentEnv), suffix, workspace.UsedRedisDatabases(checkouts))
+	if err != nil || len(plan.Set) == 0 {
+		return plan, err
+	}
+	if err := os.WriteFile(path, []byte(workspace.RewriteEnv(string(data), "", "", plan.Set)), 0o600); err != nil {
+		return plan, err
+	}
+	fmt.Println("→ wrote .env.testing with the workspace's test databases")
+	return plan, nil
 }
 
 // workspaceDB is what a new workspace does about its database.
@@ -245,7 +290,7 @@ func planWorkspaceDatabase(main, wtPath, suffix, mode, envContent string) (works
 		plan.summary = fmt.Sprintf("%s (cloned from %s)", name, db.Name)
 		plan.apply = func() error {
 			fmt.Printf("→ cloning database %s into %s\n", db.Name, name)
-			return workspace.CloneDatabase(db.Database, tools, name)
+			return workspace.CloneDatabase(db.Database, tools, name, os.Stdout)
 		}
 		return plan, nil
 	}
@@ -376,12 +421,17 @@ func runRoutaIn(dir string, args ...string) error {
 }
 
 type workspaceListEntry struct {
-	Name                 string `json:"name"`
-	Branch               string `json:"branch"`
-	Path                 string `json:"path"`
-	URL                  string `json:"url,omitempty"`
-	Database             string `json:"database,omitempty"`
-	SharesParentDatabase bool   `json:"shares_parent_database"`
+	Name                      string `json:"name"`
+	Branch                    string `json:"branch"`
+	Path                      string `json:"path"`
+	URL                       string `json:"url,omitempty"`
+	Database                  string `json:"database,omitempty"`
+	SharesParentDatabase      bool   `json:"shares_parent_database"`
+	SharesParentTestDatabases bool   `json:"shares_parent_test_databases"`
+}
+
+func readEnvFile(path string) map[string]string {
+	return workspace.ParseEnv(readFileOrEmpty(path))
 }
 
 // checkoutDatabase reads the database a checkout's .env points at. A checkout
@@ -414,6 +464,7 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 			e.Database = own.Label()
 			e.SharesParentDatabase = hasParentDB && own.Same(parentDB)
 		}
+		e.SharesParentTestDatabases = len(workspace.SharedTestDatabases(readEnvFile(filepath.Join(main, ".env.testing")), readEnvFile(filepath.Join(wt.Path, ".env.testing")))) > 0
 		entries = append(entries, e)
 	}
 	if workspaceListJSON {
@@ -425,8 +476,11 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 	}
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tBRANCH\tURL\tDATABASE\tPATH")
-	var sharing []string
+	var sharing, sharingTests []string
 	for _, e := range entries {
+		if e.SharesParentTestDatabases {
+			sharingTests = append(sharingTests, e.Name)
+		}
 		branch, url, database := e.Branch, e.URL, e.Database
 		if branch == "" {
 			branch = "(detached)"
@@ -454,6 +508,12 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 	}
 	if len(sharing) > 0 {
 		fmt.Fprintln(cmd.OutOrStderr(), "  Give it its own DB_DATABASE, or recreate it with 'routa workspace add'.")
+	}
+	for i, name := range sharingTests {
+		if i == 0 {
+			fmt.Fprintln(cmd.OutOrStderr())
+		}
+		fmt.Fprintf(cmd.OutOrStderr(), "! %s runs tests against the parent's test databases; add its name to each database in its .env.testing.\n", name)
 	}
 	return nil
 }
@@ -483,8 +543,9 @@ func runWorkspaceRm(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("you are inside %s; run this from the parent checkout", target.Path)
 	}
 
-	// Read the workspace's database before git deletes its .env.
+	// Read the workspace's databases before git deletes its .env files.
 	drop := workspaceServerDatabase(main, target.Path)
+	testDrops := planWorkspaceTestDrops(target.Path, want)
 
 	if err := workspace.RemoveWorktree(main, target.Path, workspaceForce); err != nil {
 		return err
@@ -503,6 +564,13 @@ func runWorkspaceRm(_ *cobra.Command, args []string) error {
 			return err
 		}
 		fmt.Printf("→ dropped database %s\n", drop.name)
+	}
+	for _, d := range testDrops {
+		if err := workspace.DropDatabases(d.server.Via, d.tools, d.names); err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: drop test databases on %s:%s: %v\n", d.server.Via.Host, d.server.Via.Port, err)
+			continue
+		}
+		fmt.Printf("→ dropped %d test databases on %s:%s (%s)\n", len(d.names), d.server.Via.Host, d.server.Via.Port, strings.Join(d.server.Bases, ", "))
 	}
 	if err := commitAndReload(st, fmt.Sprintf("stopped serving workspace %s", want)); err != nil {
 		return err
@@ -530,4 +598,61 @@ func workspaceServerDatabase(main, wtPath string) serverDatabase {
 	// Connect through the parent's database: Postgres cannot drop the
 	// database a session is connected to.
 	return serverDatabase{name: own.Name, via: parent.Database}
+}
+
+type testDrop struct {
+	server workspace.TestServer
+	tools  services.DatabaseTools
+	names  []string
+}
+
+// planWorkspaceTestDrops finds the workspace's test databases: those named
+// with its suffix, plus their parallel copies, on servers on this machine.
+// It boots the app with APP_ENV=testing to learn every test connection,
+// including defaults from config/database.php that .env.testing leaves out.
+// Anything it cannot read becomes a warning, so removing a broken worktree
+// still works.
+func planWorkspaceTestDrops(wtPath, suffix string) []testDrop {
+	if !fileExists(filepath.Join(wtPath, "artisan")) || !fileExists(filepath.Join(wtPath, "vendor", "autoload.php")) {
+		return nil
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	cmd := exec.Command(self, "php", "-r", workspace.LaravelConnectionsScript)
+	cmd.Dir = wtPath
+	cmd.Env = append(os.Environ(), "APP_ENV=testing")
+	out, err := cmd.Output()
+	conns, parseErr := workspace.ParseConnections(string(out))
+	if err != nil || parseErr != nil {
+		fmt.Fprintf(os.Stderr, "  warning: could not read the app's test connections, so its test databases are kept: %v\n", firstErr(err, parseErr))
+		return nil
+	}
+	var drops []testDrop
+	for _, server := range workspace.WorkspaceTestServers(conns, suffix) {
+		tools, err := databaseToolsFor(server.Via)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: %v\n", err)
+			continue
+		}
+		existing, err := workspace.ListDatabases(server.Via, tools)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: list databases on %s:%s: %v\n", server.Via.Host, server.Via.Port, err)
+			continue
+		}
+		if names := workspace.TestDatabasesToDrop(server.Bases, existing); len(names) > 0 {
+			drops = append(drops, testDrop{server: server, tools: tools, names: names})
+		}
+	}
+	return drops
+}
+
+func firstErr(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

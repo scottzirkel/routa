@@ -3,6 +3,7 @@ package workspace
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,9 +58,11 @@ func (d Database) Engine() string {
 }
 
 // CopyName is the database a workspace gets when it clones or empties the
-// parent's database: the parent's name plus the workspace suffix.
+// parent's database: the parent's name with the workspace suffix. A trailing
+// "_main" names the main checkout's copy, so the suffix replaces it:
+// aff_main becomes aff_5194, and shop becomes shop_5194.
 func CopyName(parent, suffix string) (string, error) {
-	name := parent + "_" + strings.ReplaceAll(suffix, "-", "_")
+	name := strings.TrimSuffix(parent, "_main") + "_" + strings.ReplaceAll(suffix, "-", "_")
 	if len(name) > 63 {
 		return "", fmt.Errorf("database name %s is longer than 63 characters; use a shorter workspace name", name)
 	}
@@ -79,17 +82,16 @@ func CreateDatabase(d Database, tools services.DatabaseTools, name string) error
 	return fmt.Errorf("creating %s databases is not supported", d.Connection)
 }
 
-// CloneDatabase creates name and fills it with a dump of d's database.
-func CloneDatabase(d Database, tools services.DatabaseTools, name string) error {
+// CloneDatabase creates name and fills it with a copy of d's database.
+// Warnings, such as row counts that changed while copying, go to out.
+func CloneDatabase(d Database, tools services.DatabaseTools, name string, out io.Writer) error {
 	if err := CreateDatabase(d, tools, name); err != nil {
 		return err
 	}
 	switch d.Engine() {
 	case "mysql", "mariadb":
 		return withMySQLDefaults(d, func(defaults string) error {
-			dump := exec.Command(tools.Dump, defaults, "--single-transaction", "--routines", "--triggers", "--events", "--no-tablespaces", d.Name)
-			restore := exec.Command(tools.Client, defaults, name)
-			return pipe(dump, restore)
+			return cloneMySQL(d.Name, name, tools, defaults, out)
 		})
 	case "postgres":
 		dump := postgresCommand(d, tools.Dump, "--no-owner", "--no-privileges")
@@ -113,8 +115,19 @@ func DropDatabase(d Database, tools services.DatabaseTools, name string) error {
 }
 
 // withMySQLDefaults passes credentials through a private option file, so the
-// password never appears in the process list.
+// password never appears in the process list. The MariaDB client insists on
+// TLS once a password is set, and local servers such as SingleStore in Docker
+// often have none; that one error gets a single retry without TLS. The MySQL
+// client already falls back on its own.
 func withMySQLDefaults(d Database, fn func(defaultsFlag string) error) error {
+	err := withMySQLOptions(d, false, fn)
+	if err != nil && strings.Contains(err.Error(), "SSL is required, but the server does not support it") {
+		return withMySQLOptions(d, true, fn)
+	}
+	return err
+}
+
+func withMySQLOptions(d Database, skipTLS bool, fn func(defaultsFlag string) error) error {
 	f, err := os.CreateTemp("", "routa-mysql-*.cnf")
 	if err != nil {
 		return err
@@ -129,6 +142,9 @@ func withMySQLDefaults(d Database, fn func(defaultsFlag string) error) error {
 	}
 	if d.Password != "" {
 		content += "password=" + mysqlOption(d.Password) + "\n"
+	}
+	if skipTLS {
+		content += "skip-ssl\n"
 	}
 	if _, err := f.WriteString(content); err != nil {
 		f.Close()

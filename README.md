@@ -523,24 +523,44 @@ setting. Wildcard hosts cover the app's subdomains, such as
   `--database`:
   - `clone` (the default) copies the parent's MySQL, MariaDB, Postgres, or
     SQLite database into a new one named `<database>_<name>`, such as
-    `shop_5194`. A SQLite file is copied to the same place in the worktree.
+    `shop_5194`. A name ending in `_main` swaps that ending for the
+    workspace name, so `aff_main` becomes `aff_5194`. A SQLite file is copied
+    to the same place in the worktree.
   - `empty` creates that database empty and runs `php artisan migrate`.
+- Gives the workspace its own test databases and Redis databases in its copy
+  of `.env.testing`. Test databases are created on the fly, so they are only
+  renamed: every database name gets the workspace name, so `testing` becomes
+  `testing_5194` and `affiliate_testing` becomes `affiliate_testing_5194`.
+  Laravel's parallel copies follow as `testing_5194_test_1`. `REDIS_DB` and
+  `REDIS_CACHE_DB` get numbers no other checkout's `.env` or `.env.testing`
+  uses, picked from 15 down, because a test that flushes Redis would
+  otherwise clear another checkout's data. A `.env.testing` that git tracks is
+  left alone.
 
 Workspaces never share the parent's database, so a migration, `migrate:fresh`,
 or seeder run in a workspace cannot change the parent's data. When routa
 cannot give a workspace its own database, for example because `.env` uses
 `DB_URL` or a `DB_CONNECTION` routa does not support, `add` refuses before
 creating anything. `routa workspace list` marks any worktree whose `.env`
-still points at the parent's database, such as one an agent created by hand.
+still points at the parent's database, or whose `.env.testing` still names the
+parent's test databases, such as one an agent created by hand.
 
-Cloning uses the credentials in the parent's `.env`. For a routa-managed
-server, routa prefers the dump tool shipped with that version.
+Cloning uses the credentials in the parent's `.env`. A MySQL or MariaDB copy
+never leaves the server: routa creates the tables from a schema-only dump,
+copies each table's rows with `INSERT … SELECT`, adds triggers last so they do
+not fire on copied rows, and compares row counts. Generated columns are left
+out of the copy, since the server computes them. Postgres is copied with
+`pg_dump`. For a routa-managed server, routa prefers the tools shipped with
+that version.
 
 `rm` removes the worktree and stops serving it. git refuses when the worktree
 has changes or untracked files unless you pass `--force`; ignored files such as
-`vendor/` do not count. The branch is kept. The workspace's database is kept
-too unless you pass `--drop-database`; routa never drops the parent's. A
-SQLite file goes with the worktree.
+`vendor/` do not count. The branch is kept. The workspace's test databases are
+dropped: routa asks the app (with `APP_ENV=testing`) for its test connections
+and drops each database named with the workspace name, plus its `_test_N`
+copies, on servers on this machine. The workspace's dev database is kept unless
+you pass `--drop-database`; routa never drops the parent's. A SQLite file goes
+with the worktree.
 
 routa also serves git worktrees it did not create, such as the ones coding
 agents make inside a repository. A worktree at

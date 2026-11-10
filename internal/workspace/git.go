@@ -90,6 +90,11 @@ func RemoveWorktree(main, path string, force bool) error {
 	return gitRun(main, append(args, path)...)
 }
 
+// IsTracked reports whether git tracks path in main.
+func IsTracked(main, path string) bool {
+	return gitOK(main, "ls-files", "--error-unmatch", "--", path)
+}
+
 // IgnoredPaths lists the ignored files of main relative to it, with whole
 // ignored directories collapsed to one entry ending in "/".
 func IgnoredPaths(main string) ([]string, error) {
