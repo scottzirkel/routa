@@ -106,3 +106,45 @@ func TestWorkspaceServerDatabaseNeverReturnsTheParents(t *testing.T) {
 		t.Fatalf("returned a database on another server: %#v", got)
 	}
 }
+
+func TestPlanWorkspaceDatabaseRefusesStandardPorts(t *testing.T) {
+	main := t.TempDir()
+	for _, env := range []string{
+		"DB_CONNECTION=mysql\nDB_PORT=3306\nDB_DATABASE=shop\n",
+		"DB_CONNECTION=mysql\nDB_DATABASE=shop\n", // no port means 3306
+		"DB_CONNECTION=pgsql\nDB_PORT=5432\nDB_DATABASE=shop\n",
+	} {
+		if _, err := planWorkspaceDatabase(main, main+"-x", "x", "clone", env); err == nil || !strings.Contains(err.Error(), "standard port") {
+			t.Errorf("%q: err = %v, want a standard-port refusal", env, err)
+		}
+	}
+}
+
+func TestPlanWorkspaceEnvLeavesStandardPortRedisAlone(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	base := t.TempDir()
+	main, wt := filepath.Join(base, "shop"), filepath.Join(base, "shop-x")
+	writeTestFile(t, filepath.Join(wt, ".env.testing"), "DB_DATABASE=testing\n")
+
+	plan, err := planWorkspaceEnv(main, wt, "x", "REDIS_HOST=127.0.0.1\n")
+	if err != nil || len(plan.redis.App)+len(plan.redis.Tests) != 0 {
+		t.Fatalf("Redis on 6379 got numbers: %#v, %v", plan.redis, err)
+	}
+	if plan.tests.Set["DB_DATABASE"] != "testing_x" {
+		t.Fatalf("test databases still get the suffix: %#v", plan.tests)
+	}
+	plan, err = planWorkspaceEnv(main, wt, "x", "REDIS_HOST=127.0.0.1\nREDIS_PORT=6380\n")
+	if err != nil || plan.redis.App["REDIS_DB"] == "" || plan.redis.Tests["REDIS_DB"] == "" {
+		t.Fatalf("Redis on 6380 got no numbers: %#v, %v", plan.redis, err)
+	}
+}
+
+func TestWorkspaceServerDatabaseKeepsStandardPorts(t *testing.T) {
+	base := t.TempDir()
+	main, wt := filepath.Join(base, "shop"), filepath.Join(base, "shop-x")
+	writeTestFile(t, filepath.Join(main, ".env"), "DB_CONNECTION=mysql\nDB_PORT=3306\nDB_DATABASE=shop\n")
+	writeTestFile(t, filepath.Join(wt, ".env"), "DB_CONNECTION=mysql\nDB_PORT=3306\nDB_DATABASE=shop_x\n")
+	if got := workspaceServerDatabase(main, wt); got.standardPort == "" {
+		t.Fatalf("got %#v, want it marked as on a standard port", got)
+	}
+}

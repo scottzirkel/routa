@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -285,6 +286,13 @@ func planWorkspaceEnv(main, wtPath, suffix, parentEnv string) (workspaceEnv, err
 	if port == "" {
 		port = services.RedisDefaultPort
 	}
+	if owner := services.StandardPortOwner(port); owner != "" {
+		if strings.Contains(parentEnv, "REDIS_") {
+			fmt.Printf("  warning: the app's Redis is on port %s, the standard port for %s; routa cannot see which databases other apps use there, so this workspace keeps the parent's Redis databases\n", port, owner)
+		}
+		plan.redis = workspace.RedisPlan{App: map[string]string{}, Tests: map[string]string{}}
+		return plan, nil
+	}
 	plan.redis, err = workspace.PlanRedis(parent, testEnv, hasTestEnv, workspace.UsedRedisDatabases(checkouts), services.RedisDatabaseCount(port))
 	return plan, err
 }
@@ -333,6 +341,9 @@ func planWorkspaceDatabase(main, wtPath, suffix, mode, envContent string) (works
 
 	if db.Name == "" {
 		return plan, refuse("DB_DATABASE is not set in " + main + "/.env")
+	}
+	if owner := services.StandardPortOwner(db.Port); owner != "" {
+		return plan, fmt.Errorf("the app's database is on port %s, the standard port for %s; routa never changes data on a server there, since it belongs to a system service, and workspaces never share the parent's database. Move the app to a routa database first, for example: routa db start %s <version> <name> on <port>", db.Port, owner, db.Engine())
 	}
 	name, err := workspace.CopyName(db.Name, suffix)
 	if err != nil {
@@ -622,6 +633,8 @@ func runWorkspaceRm(_ *cobra.Command, args []string) error {
 	fmt.Printf("→ removed worktree %s\n", target.Path)
 	switch {
 	case drop.name == "":
+	case drop.standardPort != "":
+		fmt.Printf("→ kept database %s: port %s is the standard port for %s, and routa never drops data there\n", drop.name, drop.via.Port, drop.standardPort)
 	case !workspaceDropDB:
 		fmt.Printf("→ kept database %s; pass --drop-database to drop it with the workspace\n", drop.name)
 	default:
@@ -647,8 +660,9 @@ func runWorkspaceRm(_ *cobra.Command, args []string) error {
 }
 
 type serverDatabase struct {
-	name string
-	via  workspace.Database // connection to drop it through
+	name         string
+	via          workspace.Database // connection to drop it through
+	standardPort string             // services whose standard port it is on; never dropped
 }
 
 // workspaceServerDatabase returns the workspace's own database on the
@@ -662,14 +676,23 @@ func workspaceServerDatabase(main, wtPath string) serverDatabase {
 	}
 	// Connect through the parent's database: Postgres cannot drop the
 	// database a session is connected to.
-	return serverDatabase{name: own.Name, via: parent.Database}
+	return serverDatabase{name: own.Name, via: parent.Database, standardPort: services.StandardPortOwner(own.Port)}
 }
 
 // pruneStaleTestDatabases drops the test databases that worktrees left
-// behind, after pruning git's records of worktrees whose folders are gone. It
-// boots the main checkout's app with APP_ENV=testing to learn which local
-// servers its tests use and the test database names worktrees derive theirs
-// from. With dryRun it only reports.
+// behind, after pruning git's records of worktrees whose folders are gone.
+// With dryRun it only reports.
+//
+// Several checks keep it from touching anything else:
+//   - The names it looks for come only from the main checkout's .env.testing
+//     (testing, affiliate_testing), plus a worktree name and _test_N copies.
+//   - It only looks at servers the tests connect to, found by booting the
+//     main checkout's app with APP_ENV=testing; read-only and production
+//     connections are ignored.
+//   - The server must be on this machine, off every service's standard port,
+//     and already hold the main checkout's test database or its copies.
+//   - Names in any routa site's or worktree's .env or .env.testing are kept,
+//     as are worktrees that still exist and databases with open connections.
 func pruneStaleTestDatabases(main string, dryRun bool) error {
 	if !dryRun {
 		if err := workspace.PruneWorktrees(main); err != nil {
@@ -679,12 +702,21 @@ func pruneStaleTestDatabases(main string, dryRun bool) error {
 	if !fileExists(filepath.Join(main, "artisan")) || !fileExists(filepath.Join(main, "vendor", "autoload.php")) {
 		return nil
 	}
+	var templates []string
+	for key, value := range readEnvFile(filepath.Join(main, ".env.testing")) {
+		if workspace.IsTestDatabaseKey(key) && workspace.PlainDatabaseName(value) && !slices.Contains(templates, value) {
+			templates = append(templates, value)
+		}
+	}
+	if len(templates) == 0 {
+		return nil
+	}
+
 	wts, err := workspace.ListWorktrees(main)
 	if err != nil {
 		return err
 	}
 	liveSuffixes := map[string]bool{}
-	liveNames := map[string]bool{}
 	checkouts := []string{main}
 	for _, wt := range wts {
 		if !fileExists(wt.Path) {
@@ -693,10 +725,18 @@ func pruneStaleTestDatabases(main string, dryRun bool) error {
 		liveSuffixes[strings.ReplaceAll(site.WorktreeSuffix(main, wt.Path), "-", "_")] = true
 		checkouts = append(checkouts, wt.Path)
 	}
+	if st, err := site.Load(); err == nil {
+		for _, r := range st.Resolve() {
+			if r.Path != "" {
+				checkouts = append(checkouts, r.Path)
+			}
+		}
+	}
+	liveNames := map[string]bool{}
 	for _, dir := range checkouts {
 		for _, file := range []string{".env", ".env.testing"} {
 			for key, value := range readEnvFile(filepath.Join(dir, file)) {
-				if strings.HasPrefix(key, "DB_") && strings.HasSuffix(key, "DATABASE") {
+				if workspace.IsTestDatabaseKey(key) {
 					liveNames[value] = true
 				}
 			}
@@ -724,16 +764,36 @@ func pruneStaleTestDatabases(main string, dryRun bool) error {
 		verb = "would drop"
 	}
 	found := false
-	for _, server := range workspace.TestServers(conns) {
+	for _, server := range workspace.TestServers(conns, templates) {
+		where := server.Via.Host + ":" + server.Via.Port
 		tools, err := databaseToolsFor(server.Via)
 		if err != nil {
 			return err
 		}
 		existing, err := workspace.ListDatabases(server.Via, tools)
 		if err != nil {
-			return fmt.Errorf("list databases on %s:%s: %w", server.Via.Host, server.Via.Port, err)
+			return fmt.Errorf("list databases on %s: %w", where, err)
 		}
-		stale := workspace.StaleTestDatabases(existing, server.Templates, liveSuffixes, liveNames)
+		var hosted []string
+		for _, t := range server.Templates {
+			if workspace.HostsTestSet(existing, t) {
+				hosted = append(hosted, t)
+			}
+		}
+		if len(hosted) == 0 {
+			continue // not the server these tests run on
+		}
+		busy, err := workspace.BusyDatabases(server.Via, tools)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: skipped %s: could not see which databases are in use: %v\n", where, err)
+			continue
+		}
+		var stale []string
+		for _, db := range workspace.StaleTestDatabases(existing, hosted, liveSuffixes, liveNames) {
+			if !busy[db] {
+				stale = append(stale, db)
+			}
+		}
 		if len(stale) == 0 {
 			continue
 		}
@@ -750,7 +810,7 @@ func pruneStaleTestDatabases(main string, dryRun bool) error {
 		}
 		sort.Strings(bases)
 		for _, base := range bases {
-			fmt.Printf("→ %s %s on %s:%s (%d databases)\n", verb, base, server.Via.Host, server.Via.Port, sets[base])
+			fmt.Printf("→ %s %s on %s (%d databases)\n", verb, base, where, sets[base])
 		}
 	}
 	if !found && dryRun {

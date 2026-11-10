@@ -56,17 +56,20 @@ func ParseConnections(output string) ([]Connection, error) {
 	return conns, nil
 }
 
-// TestServer is a local database server the app's tests use, with the main
+// TestServer is a database server the app's tests use, with the main
 // checkout's test database names on it, such as testing.
 type TestServer struct {
 	Via       Database // connection details, without a database name
 	Templates []string // the main checkout's test database names
 }
 
-// TestServers groups the app's test connections by server. Only
-// MySQL-protocol servers on this machine count, so cleanup can never reach a
-// remote database.
-func TestServers(conns []Connection) []TestServer {
+// TestServers picks the servers the app's tests actually use: connections
+// whose database is one of the main checkout's test database names, from its
+// .env.testing. Every other connection, such as a read-only or production
+// one, is ignored. So are servers that are not on this machine, a host left
+// empty, and servers on a service's standard port, which belong to a system
+// service rather than routa. Only MySQL-protocol servers count.
+func TestServers(conns []Connection, templates []string) []TestServer {
 	byServer := map[string]*TestServer{}
 	var order []string
 	for _, c := range conns {
@@ -75,11 +78,11 @@ func TestServers(conns []Connection) []TestServer {
 		default:
 			continue
 		}
-		if !localHost(c.Host) || !plainDatabaseName(c.Database) {
+		if c.Host == "" || !localHost(c.Host) || services.StandardPortOwner(c.Port) != "" || !contains(templates, c.Database) {
 			continue
 		}
 		host := c.Host
-		if host == "" || host == "localhost" {
+		if host == "localhost" {
 			host = "127.0.0.1"
 		}
 		key := host + ":" + c.Port
@@ -99,6 +102,31 @@ func TestServers(conns []Connection) []TestServer {
 		out = append(out, *byServer[key])
 	}
 	return out
+}
+
+// HostsTestSet reports whether a server already holds template or one of its
+// _test_N copies: evidence that it is the server the tests run on.
+func HostsTestSet(existing []string, template string) bool {
+	for _, db := range existing {
+		if testCopyRE.ReplaceAllString(db, "") == template {
+			return true
+		}
+	}
+	return false
+}
+
+// BusyDatabases lists the databases that have an open connection right now,
+// such as a test run in progress, so cleanup can leave them alone.
+func BusyDatabases(d Database, tools services.DatabaseTools) (map[string]bool, error) {
+	busy := map[string]bool{}
+	err := withMySQLDefaults(d, func(defaults string) error {
+		rows, err := mysqlQuery(tools, defaults, "SELECT DISTINCT DB FROM information_schema.PROCESSLIST WHERE DB IS NOT NULL")
+		for _, row := range rows {
+			busy[row[0]] = true
+		}
+		return err
+	})
+	return busy, err
 }
 
 var (

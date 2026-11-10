@@ -570,13 +570,33 @@ After removing the worktree, `rm` drops the test databases that removed
 worktrees left behind, including this one's. `routa workspace prune` does the
 same on demand, for worktrees removed another way, such as with
 `git worktree remove`; `--dry-run` only lists them. A test database counts as
-left behind when it is named after one of the main checkout's test databases
-plus a worktree name, such as `testing_4764`, and no current worktree has that
-name. Its `_test_N` copies go with it. routa learns the test servers and names
-by booting the main checkout's app with `APP_ENV=testing`, and only touches
-servers on this machine. The main checkout's own test databases, and any
-database a current checkout's `.env` or `.env.testing` names, are never
-dropped.
+left behind when it is named after one of the test databases in the main
+checkout's `.env.testing` plus a worktree name, such as `testing_4764`, and no
+current worktree has that name. Its `_test_N` copies go with it. Several checks
+keep cleanup away from anything else:
+
+- It only looks at servers the tests connect to, which routa learns by booting
+  the main checkout's app with `APP_ENV=testing`. Read-only and production
+  connections are ignored.
+- The server must be on this machine, not on a service's standard port, and
+  already hold the main checkout's test database or its copies.
+- The main checkout's own test databases, any database a routa site's or
+  worktree's `.env` or `.env.testing` names, and any database with an open
+  connection are never dropped.
+
+### Standard ports
+
+routa runs its own services off the standard ports (Redis on 6380, databases
+on 3307 and up), so a server on a standard port, such as 3306 for MySQL,
+MariaDB, and SingleStore, 5432 for Postgres, or 6379 for Redis, belongs to a
+system service or someone else. Workspaces never change data there:
+
+- `workspace add` refuses when the app's database is on a standard port,
+  since it cannot copy the database without writing to that server and
+  workspaces never share it. Move the app to a routa database first.
+- `rm --drop-database` and test cleanup never drop anything there.
+- A Redis on its standard port gets no workspace numbers, since routa cannot
+  see which databases other apps use; the workspace keeps the parent's.
 
 routa also serves git worktrees it did not create, such as the ones coding
 agents make inside a repository. A worktree at

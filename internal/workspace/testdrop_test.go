@@ -35,17 +35,24 @@ func TestParseConnectionsIgnoresOutputBeforeTheMarker(t *testing.T) {
 	}
 }
 
-func TestTestServersOnlyPicksLocalMySQLProtocolServers(t *testing.T) {
-	conns := []Connection{
-		{Name: "mysql", Driver: "mysql", Host: "127.0.0.1", Port: "3310", Database: "testing", Username: "u"},
-		{Name: "mysql-metrics", Driver: "mysql", Host: "localhost", Port: "3310", Database: "testing", Username: "u"},
-		{Name: "singlestore", Driver: "singlestore", Host: "127.0.0.1", Port: "3307", Database: "affiliate_testing", Username: "root"},
-		{Name: "staging", Driver: "mysql", Host: "staging.example.com", Port: "3306", Database: "staging"},
-		{Name: "readonly", Driver: "mysql", Host: "", Port: "3306", Database: ""},
-		{Name: "pgsql", Driver: "pgsql", Host: "127.0.0.1", Port: "5432", Database: "testing"},
-		{Name: "sqlite", Driver: "sqlite", Database: ":memory:"},
-	}
-	got := TestServers(conns)
+// affiliateTestConns is what the affiliate app reports with APP_ENV=testing,
+// including its read-only and production connections on port 3306.
+var affiliateTestConns = []Connection{
+	{Name: "mysql", Driver: "mysql", Host: "127.0.0.1", Port: "3310", Database: "testing", Username: "u"},
+	{Name: "mariadb", Driver: "mariadb", Host: "127.0.0.1", Port: "3310", Database: "testing"},
+	{Name: "mysql-metrics", Driver: "mysql", Host: "localhost", Port: "3310", Database: "testing"},
+	{Name: "mysql-app-readonly", Driver: "mysql", Host: "", Port: "3306", Database: ""},
+	{Name: "mysql-staging-readonly", Driver: "mysql", Host: "", Port: "3306", Database: "staging"},
+	{Name: "singlestore", Driver: "singlestore", Host: "127.0.0.1", Port: "3307", Database: "affiliate_testing", Username: "root"},
+	{Name: "singlestore-prod", Driver: "mysql", Host: "127.0.0.1", Port: "3306", Database: "affiliate"},
+	{Name: "singlestore-readonly", Driver: "mysql", Host: "", Port: "3306", Database: "affiliate"},
+	{Name: "laravel-brain", Driver: "mysql", Host: "127.0.0.1", Port: "3306", Database: ""},
+	{Name: "remote", Driver: "mysql", Host: "staging.example.com", Port: "3310", Database: "testing"},
+	{Name: "pgsql", Driver: "pgsql", Host: "127.0.0.1", Port: "5433", Database: "testing"},
+}
+
+func TestTestServersOnlyPicksTheServersTestsUse(t *testing.T) {
+	got := TestServers(affiliateTestConns, []string{"testing", "affiliate_testing"})
 	if len(got) != 2 {
 		t.Fatalf("servers = %#v", got)
 	}
@@ -54,6 +61,24 @@ func TestTestServersOnlyPicksLocalMySQLProtocolServers(t *testing.T) {
 	}
 	if got[1].Via.Port != "3307" || !reflect.DeepEqual(got[1].Templates, []string{"affiliate_testing"}) || got[1].Via.User != "root" {
 		t.Fatalf("singlestore server = %#v", got[1])
+	}
+}
+
+func TestTestServersNeverPicksAStandardPort(t *testing.T) {
+	// Even when a test database name matches, port 3306 belongs to a system
+	// server routa does not run.
+	conns := []Connection{{Name: "mysql", Driver: "mysql", Host: "127.0.0.1", Port: "3306", Database: "testing"}}
+	if got := TestServers(conns, []string{"testing"}); len(got) != 0 {
+		t.Fatalf("servers = %#v", got)
+	}
+}
+
+func TestHostsTestSet(t *testing.T) {
+	if !HostsTestSet([]string{"aff_main", "testing"}, "testing") || !HostsTestSet([]string{"testing_test_3"}, "testing") {
+		t.Fatal("a server with the test database or its copies hosts the set")
+	}
+	if HostsTestSet([]string{"testing_5194", "testing_5194_test_1", "affiliate"}, "testing") {
+		t.Fatal("a server with only worktree sets does not prove it is the main test server")
 	}
 }
 

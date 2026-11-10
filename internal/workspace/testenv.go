@@ -216,3 +216,11 @@ func SharedRedisDatabases(parent, worktree map[string]string) []string {
 	}
 	return shared
 }
+
+// IsTestDatabaseKey reports whether a .env key names a database, such as
+// DB_DATABASE or DB_SINGLESTORE_DATABASE.
+func IsTestDatabaseKey(key string) bool { return testDatabaseKey.MatchString(key) }
+
+// PlainDatabaseName reports whether a value is a database name rather than
+// a SQLite path, :memory:, or a ${...} reference.
+func PlainDatabaseName(v string) bool { return plainDatabaseName(v) }
