@@ -524,7 +524,9 @@ checkout has open. Pass `--from HEAD` to start from that branch instead, or
   everything ignored under `public/` except `public/hot` (built and published
   assets, and the `public/storage` link), keys in `storage/`, `auth.json`, and
   local agent instructions (`.ai/`, `CLAUDE.local.md`, `AGENTS.local.md`).
-  Name anything else with `--copy <path>`. Caches, logs, backups, lock files,
+  `AGENTS.local.md` and `CLAUDE.local.md` become links to the parent's file
+  rather than copies, so an edit in the parent reaches every worktree. Name
+  anything else with `--copy <path>`. Caches, logs, backups, lock files,
   local data, and other worktrees stay behind. The copy uses copy-on-write
   (`cp --reflink=auto`), so on btrfs or XFS it takes no extra disk until files
   change.
@@ -613,7 +615,8 @@ system service or someone else. Workspaces never change data there:
 `routa workspace fix <name>` brings a worktree made by hand, or by an older
 routa, in line with what `add` sets up, changing only what is wrong. It
 replaces a `vendor` or `node_modules` link into another checkout with the
-worktree's own copy, copies missing working files, renames the parent's or
+worktree's own copy, copies missing working files, turns an unedited copy of
+`AGENTS.local.md` or `CLAUDE.local.md` into a link, renames the parent's or
 another worktree's hosts in `.env`, gives the worktree its own dev database
 when it shares one or points at one that is gone, renames test databases it
 shares, and replaces Redis numbers another checkout uses. Test database names

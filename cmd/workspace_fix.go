@@ -128,6 +128,20 @@ func runWorkspaceFix(_ *cobra.Command, args []string) error {
 		}
 	}
 
+	// Local agent instructions should be links to the parent's, as add makes
+	// them, so edits in the parent reach the worktree.
+	identical, differ := workspace.StaleInstructionCopies(main, wtPath)
+	for _, rel := range identical {
+		rel := rel
+		steps = append(steps, fixStep{
+			what: fmt.Sprintf("replace the copy of %s with a link to the parent's, so it stays current", rel),
+			do:   func() error { return workspace.LinkInstructionFile(main, wtPath, rel) },
+		})
+	}
+	for _, rel := range differ {
+		hints = append(hints, fmt.Sprintf("%s differs from the parent's, so it was left as it is", rel))
+	}
+
 	// The .env files as they will be once copied, so later steps can plan.
 	envPath := filepath.Join(wtPath, ".env")
 	envContent := readFileOrEmpty(envPath)

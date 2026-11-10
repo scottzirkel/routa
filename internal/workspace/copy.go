@@ -109,12 +109,24 @@ func CopyPaths(src, dst string, plan, skip []string, out io.Writer) error {
 		if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
 			return err
 		}
+		if isInstructionFile(rel) {
+			// One file for every checkout, as with a hand-made link, so an
+			// edit in the parent reaches every worktree.
+			fmt.Fprintf(out, "  link %s\n", p)
+			if err := os.Symlink(from, to); err != nil {
+				return err
+			}
+			continue
+		}
 		fmt.Fprintf(out, "  copy %s\n", p)
 		cmd := exec.Command("cp", "-a", "--reflink=auto", "--no-target-directory", from, to)
 		if msg, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("copy %s: %w: %s", p, err, strings.TrimSpace(string(msg)))
 		}
 		if err := repointSymlink(src, dst, to); err != nil {
+			return err
+		}
+		if err := linkInstructionFiles(src, dst, rel); err != nil {
 			return err
 		}
 		for _, inner := range prune {
@@ -128,6 +140,38 @@ func CopyPaths(src, dst string, plan, skip []string, out io.Writer) error {
 	}
 	// Vite's dependency cache records absolute paths; let it rebuild.
 	_ = os.RemoveAll(filepath.Join(dst, "node_modules", ".vite"))
+	return nil
+}
+
+// instructionFiles are local agent instructions. Every checkout should read
+// the parent's copy, so workspaces link to it instead of copying it.
+var instructionFiles = []string{"AGENTS.local.md", "CLAUDE.local.md"}
+
+func isInstructionFile(rel string) bool {
+	for _, name := range instructionFiles {
+		if filepath.Base(rel) == name {
+			return true
+		}
+	}
+	return false
+}
+
+// linkInstructionFiles replaces instruction files that a copied directory,
+// such as a fully ignored .ai/, brought along with links to the parent's.
+func linkInstructionFiles(src, dst, rel string) error {
+	for _, name := range instructionFiles {
+		to := filepath.Join(dst, rel, name)
+		info, err := os.Lstat(to)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if err := os.Remove(to); err != nil {
+			return err
+		}
+		if err := os.Symlink(filepath.Join(src, rel, name), to); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -159,4 +203,42 @@ func CopyFile(from, to string) error {
 		return fmt.Errorf("copy %s: %w: %s", from, err, strings.TrimSpace(string(msg)))
 	}
 	return nil
+}
+
+// StaleInstructionCopies lists the worktree's local agent instruction files
+// (directly in it or in .ai/) that are plain copies of the parent's. Identical
+// copies can safely become links; ones that differ have local edits.
+func StaleInstructionCopies(src, dst string) (identical, differ []string) {
+	for _, dir := range []string{"", ".ai"} {
+		for _, name := range instructionFiles {
+			rel := filepath.Join(dir, name)
+			info, err := os.Lstat(filepath.Join(dst, rel))
+			if err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			parent, err := os.ReadFile(filepath.Join(src, rel))
+			if err != nil {
+				continue
+			}
+			own, err := os.ReadFile(filepath.Join(dst, rel))
+			if err != nil {
+				continue
+			}
+			if string(own) == string(parent) {
+				identical = append(identical, rel)
+			} else {
+				differ = append(differ, rel)
+			}
+		}
+	}
+	return identical, differ
+}
+
+// LinkInstructionFile replaces the worktree's copy of rel with a link to the
+// parent's.
+func LinkInstructionFile(src, dst, rel string) error {
+	if err := os.Remove(filepath.Join(dst, rel)); err != nil {
+		return err
+	}
+	return os.Symlink(filepath.Join(src, rel), filepath.Join(dst, rel))
 }

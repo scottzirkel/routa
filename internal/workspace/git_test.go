@@ -104,6 +104,7 @@ func TestWorktreeRoundTrip(t *testing.T) {
 	write(".env", "APP_URL=https://shop.test\n")
 	write("vendor/autoload.php", "<?php")
 	write("public/hot", "http://[::1]:5173")
+	write(".ai/AGENTS.local.md", "local rules")
 	// data/ holds only ignored files, so git reports it as one directory.
 	write("data/app.sqlite", "db")
 	write("data/keep.txt", "keep")
@@ -113,7 +114,7 @@ func TestWorktreeRoundTrip(t *testing.T) {
 	if err := os.Symlink(filepath.Join(main, "storage", "app", "public"), filepath.Join(main, "public", "storage")); err != nil {
 		t.Fatal(err)
 	}
-	write(".gitignore", "/vendor\n.env\n/public/hot\n/bootstrap/cache/*.php\n/data\n/public/storage\n")
+	write(".gitignore", "/vendor\n.env\n/public/hot\n/bootstrap/cache/*.php\n/data\n/public/storage\n/.ai/AGENTS.local.md\n")
 	gitIn(t, main, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "ignore link")
 
 	if got, err := MainRepo(filepath.Join(main, "public")); err != nil || got != main {
@@ -143,6 +144,9 @@ func TestWorktreeRoundTrip(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(wt, rel)); !os.IsNotExist(err) {
 			t.Errorf("%s copied, want skipped", rel)
 		}
+	}
+	if target, err := os.Readlink(filepath.Join(wt, ".ai", "AGENTS.local.md")); err != nil || target != filepath.Join(main, ".ai", "AGENTS.local.md") {
+		t.Errorf(".ai/AGENTS.local.md -> %q, %v; want a link to the parent's", target, err)
 	}
 	if target, err := os.Readlink(filepath.Join(wt, "public", "storage")); err != nil || target != filepath.Join(wt, "storage", "app", "public") {
 		t.Errorf("public/storage -> %q, %v; want it re-pointed into the worktree", target, err)
@@ -212,5 +216,34 @@ func TestNewWorkspacesStartFromTheRemoteMainBranch(t *testing.T) {
 	commit(lonely, "only commit")
 	if ref, err := DefaultBase(lonely); err != nil || ref != "HEAD" {
 		t.Fatalf("without a remote: %q, %v", ref, err)
+	}
+}
+
+func TestStaleInstructionCopies(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	for _, dir := range []string{src, dst} {
+		if err := os.MkdirAll(filepath.Join(dir, ".ai"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(path, content string) {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(src, ".ai", "AGENTS.local.md"), "rules")
+	write(filepath.Join(dst, ".ai", "AGENTS.local.md"), "rules")
+	write(filepath.Join(src, "CLAUDE.local.md"), "parent")
+	write(filepath.Join(dst, "CLAUDE.local.md"), "edited here")
+
+	identical, differ := StaleInstructionCopies(src, dst)
+	if !reflect.DeepEqual(identical, []string{".ai/AGENTS.local.md"}) || !reflect.DeepEqual(differ, []string{"CLAUDE.local.md"}) {
+		t.Fatalf("identical = %v, differ = %v", identical, differ)
+	}
+	if err := LinkInstructionFile(src, dst, ".ai/AGENTS.local.md"); err != nil {
+		t.Fatal(err)
+	}
+	if identical, _ := StaleInstructionCopies(src, dst); len(identical) != 0 {
+		t.Fatalf("still a copy: %v", identical)
 	}
 }
