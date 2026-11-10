@@ -506,6 +506,10 @@ routa workspace rm 5194 --drop-database
 routa workspace prune --dry-run             # test databases left by removed worktrees
 ```
 
+Workspace commands act on the site whose git repository holds the current
+folder. From anywhere else, name the site with `--site`, as in
+`routa workspace rm 5194 --site shop`.
+
 `add` creates the worktree beside the repository and serves it at
 `https://shop-5194.test`, with the parent's docroot, PHP version, and HTTPS
 setting. Wildcard hosts cover the app's subdomains, such as
@@ -563,8 +567,9 @@ that version.
 `rm` removes the worktree and stops serving it. git refuses when the worktree
 has changes or untracked files unless you pass `--force`; ignored files such as
 `vendor/` do not count. The branch is kept. The workspace's dev database is kept
-unless you pass `--drop-database`; routa never drops the parent's. A SQLite file
-goes with the worktree.
+unless you pass `--drop-database`; routa never drops the parent's, or one that
+another worktree or routa site still names in its `.env`. A SQLite file goes
+with the worktree.
 
 After removing the worktree, `rm` drops the test databases that removed
 worktrees left behind, including this one's. `routa workspace prune` does the

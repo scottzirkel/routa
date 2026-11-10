@@ -25,6 +25,7 @@ var (
 	workspaceForce    bool
 	workspaceDropDB   bool
 	workspaceDryRun   bool
+	workspaceSite     string
 )
 
 var workspaceCmd = &cobra.Command{
@@ -108,6 +109,7 @@ with APP_ENV=testing.`,
 }
 
 func init() {
+	workspaceCmd.PersistentFlags().StringVar(&workspaceSite, "site", "", "site to work on, instead of the one whose repository holds the current folder")
 	workspacePruneCmd.Flags().BoolVar(&workspaceDryRun, "dry-run", false, "list what would be dropped without dropping it")
 	workspaceAddCmd.Flags().StringVar(&workspaceBranch, "branch", "", "branch to create or check out (default: the workspace name)")
 	workspaceAddCmd.Flags().StringVar(&workspaceFrom, "from", "", "commit or branch the new branch starts from (default: HEAD)")
@@ -119,24 +121,39 @@ func init() {
 	rootCmd.AddCommand(workspaceCmd)
 }
 
-// workspaceRepo finds the repository and parent site for the current
-// directory, which may be inside the main checkout or one of its worktrees.
+// workspaceRepo finds the repository and parent site to work on: the one
+// --site names, or else the one whose repository holds the current folder,
+// which may be the main checkout or one of its worktrees.
 func workspaceRepo() (main, parent string, st *site.State, err error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", "", nil, err
-	}
-	main, err = workspace.MainRepo(cwd)
-	if err != nil {
-		return "", "", nil, err
-	}
 	st, err = site.Load()
 	if err != nil {
 		return "", "", nil, err
 	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", "", nil, err
+	}
+	if workspaceSite != "" {
+		name := strings.TrimSuffix(workspaceSite, ".test")
+		dir = ""
+		for _, r := range st.Resolve() {
+			if r.Name == name && r.Path != "" {
+				dir = r.Path
+				break
+			}
+		}
+		if dir == "" {
+			return "", "", nil, fmt.Errorf("no routa site named %s serves a folder; see 'routa status'", name)
+		}
+	}
+	const hint = "run routa workspace from inside a site's folder, such as the app's main checkout, or name the site with --site <name>"
+	main, err = workspace.MainRepo(dir)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("%s is not inside a git repository; %s", dir, hint)
+	}
 	parent, ok := st.PrimarySiteForPath(main)
 	if !ok {
-		return "", "", nil, fmt.Errorf("no routa site serves %s; run 'routa link' there first", main)
+		return "", "", nil, fmt.Errorf("no routa site serves %s; %s", main, hint)
 	}
 	return main, parent, st, nil
 }
@@ -633,6 +650,8 @@ func runWorkspaceRm(_ *cobra.Command, args []string) error {
 	fmt.Printf("→ removed worktree %s\n", target.Path)
 	switch {
 	case drop.name == "":
+	case drop.sharedWith != "":
+		fmt.Printf("→ kept database %s: %s uses it too\n", drop.name, drop.sharedWith)
 	case drop.standardPort != "":
 		fmt.Printf("→ kept database %s: port %s is the standard port for %s, and routa never drops data there\n", drop.name, drop.via.Port, drop.standardPort)
 	case !workspaceDropDB:
@@ -663,6 +682,7 @@ type serverDatabase struct {
 	name         string
 	via          workspace.Database // connection to drop it through
 	standardPort string             // services whose standard port it is on; never dropped
+	sharedWith   string             // another checkout that uses it too; never dropped
 }
 
 // workspaceServerDatabase returns the workspace's own database on the
@@ -676,7 +696,40 @@ func workspaceServerDatabase(main, wtPath string) serverDatabase {
 	}
 	// Connect through the parent's database: Postgres cannot drop the
 	// database a session is connected to.
-	return serverDatabase{name: own.Name, via: parent.Database, standardPort: services.StandardPortOwner(own.Port)}
+	drop := serverDatabase{name: own.Name, via: parent.Database, standardPort: services.StandardPortOwner(own.Port)}
+	for _, dir := range otherCheckouts(main, wtPath) {
+		if other, ok := checkoutDatabase(dir); ok && other.Same(own) {
+			drop.sharedWith = dir
+			break
+		}
+	}
+	return drop
+}
+
+// otherCheckouts lists the folders, besides main and exclude, whose .env
+// files might name the same databases: the repository's other worktrees and
+// every folder a routa site serves.
+func otherCheckouts(main, exclude string) []string {
+	seen := map[string]bool{filepath.Clean(main): true, filepath.Clean(exclude): true}
+	var out []string
+	add := func(dir string) {
+		if dir == "" || seen[filepath.Clean(dir)] {
+			return
+		}
+		seen[filepath.Clean(dir)] = true
+		out = append(out, dir)
+	}
+	if wts, err := workspace.ListWorktrees(main); err == nil {
+		for _, wt := range wts {
+			add(wt.Path)
+		}
+	}
+	if st, err := site.Load(); err == nil {
+		for _, r := range st.Resolve() {
+			add(r.Path)
+		}
+	}
+	return out
 }
 
 // pruneStaleTestDatabases drops the test databases that worktrees left

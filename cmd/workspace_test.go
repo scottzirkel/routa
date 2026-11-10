@@ -2,9 +2,12 @@ package cmd
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/scottzirkel/routa/internal/site"
 )
 
 func TestWorkspaceAddClonesTheDatabaseByDefault(t *testing.T) {
@@ -89,6 +92,7 @@ func TestPlanWorkspaceDatabaseMovesAnOutsideSQLiteFileIntoTheWorktree(t *testing
 }
 
 func TestWorkspaceServerDatabaseNeverReturnsTheParents(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	base := t.TempDir()
 	main, wt := filepath.Join(base, "shop"), filepath.Join(base, "shop-x")
 	writeTestFile(t, filepath.Join(main, ".env"), "DB_CONNECTION=mysql\nDB_PORT=3310\nDB_DATABASE=shop\n")
@@ -140,11 +144,58 @@ func TestPlanWorkspaceEnvLeavesStandardPortRedisAlone(t *testing.T) {
 }
 
 func TestWorkspaceServerDatabaseKeepsStandardPorts(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	base := t.TempDir()
 	main, wt := filepath.Join(base, "shop"), filepath.Join(base, "shop-x")
 	writeTestFile(t, filepath.Join(main, ".env"), "DB_CONNECTION=mysql\nDB_PORT=3306\nDB_DATABASE=shop\n")
 	writeTestFile(t, filepath.Join(wt, ".env"), "DB_CONNECTION=mysql\nDB_PORT=3306\nDB_DATABASE=shop_x\n")
 	if got := workspaceServerDatabase(main, wt); got.standardPort == "" {
 		t.Fatalf("got %#v, want it marked as on a standard port", got)
+	}
+}
+
+func TestWorkspaceServerDatabaseKeepsADatabaseAnotherCheckoutUses(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	base := t.TempDir()
+	main, wt, other := filepath.Join(base, "shop"), filepath.Join(base, "shop-x"), filepath.Join(base, "shop-y")
+	writeTestFile(t, filepath.Join(main, ".env"), "DB_CONNECTION=mysql\nDB_PORT=3310\nDB_DATABASE=shop_main\n")
+	writeTestFile(t, filepath.Join(wt, ".env"), "DB_CONNECTION=mysql\nDB_PORT=3310\nDB_DATABASE=shop_old\n")
+	writeTestFile(t, filepath.Join(other, ".env"), "DB_CONNECTION=mysql\nDB_PORT=3310\nDB_DATABASE=shop_old\n")
+	if err := site.Save(&site.State{Links: []site.Link{{Name: "shop-y", Path: other, Secure: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := workspaceServerDatabase(main, wt); got.sharedWith != other {
+		t.Fatalf("got %#v, want it kept because %s uses it", got, other)
+	}
+}
+
+func TestWorkspaceRepoExplainsHowToPickASite(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "-C", repo, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	t.Chdir(repo)
+	defer func() { workspaceSite = "" }()
+
+	if _, _, _, err := workspaceRepo(); err == nil || !strings.Contains(err.Error(), "--site") {
+		t.Fatalf("err = %v, want a hint about --site", err)
+	}
+	workspaceSite = "missing"
+	if _, _, _, err := workspaceRepo(); err == nil || !strings.Contains(err.Error(), "no routa site named missing") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := site.Save(&site.State{Links: []site.Link{{Name: "shop", Path: repo, Secure: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	workspaceSite = "shop.test"
+	t.Chdir(t.TempDir()) // anywhere: --site picks the repository
+	main, parent, _, err := workspaceRepo()
+	if err != nil || parent != "shop" {
+		t.Fatalf("main = %q, parent = %q, err = %v", main, parent, err)
+	}
+	if want, _ := filepath.EvalSymlinks(repo); main != repo && main != want {
+		t.Fatalf("main = %q, want %q", main, repo)
 	}
 }
