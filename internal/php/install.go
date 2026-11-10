@@ -207,8 +207,16 @@ func resolveInstalledSpec(spec string) (string, error) {
 
 // Install downloads cli + fpm, writes them to bin/php and bin/php-fpm,
 // and refreshes the major.minor symlink.
-func Install(ctx context.Context, r Release, out io.Writer) error {
+func Install(ctx context.Context, r Release, out io.Writer) (err error) {
 	dir := versionDir(r.Version.String())
+	if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+		// A half-installed new version would show up in `routa php list`.
+		defer func() {
+			if err != nil {
+				_ = os.RemoveAll(dir)
+			}
+		}()
+	}
 	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {
 		return err
 	}
@@ -246,26 +254,29 @@ func routaAssetArch() (string, error) {
 	}
 }
 
+// downloadAndExtract writes to a temporary file beside destBin and renames it
+// into place only after a complete download. A failed download therefore
+// never touches an installed binary: replacing php-fpm with a partial file
+// would take every site on that version down with 502s.
 func downloadAndExtract(ctx context.Context, url, destBin string, out io.Writer) error {
 	if out == nil {
 		out = io.Discard
 	}
+	tmp := destBin + ".download"
+	defer os.Remove(tmp)
 	const attempts = 3
-	var lastErr error
-	for attempt := 1; attempt <= attempts; attempt++ {
-		if err := downloadAndExtractOnce(ctx, url, destBin, out); err != nil {
-			lastErr = err
-			if ctx.Err() != nil || !retryableDownloadError(err) || attempt == attempts {
-				return err
-			}
-			_ = os.Remove(destBin)
-			fmt.Fprintf(out, "\n  retrying download (%d/%d): %v\n", attempt+1, attempts, err)
-			time.Sleep(time.Duration(attempt) * time.Second)
-			continue
+	for attempt := 1; ; attempt++ {
+		err := downloadAndExtractOnce(ctx, url, tmp, out)
+		if err == nil {
+			return os.Rename(tmp, destBin)
 		}
-		return nil
+		_ = os.Remove(tmp)
+		if ctx.Err() != nil || !retryableDownloadError(err) || attempt == attempts {
+			return err
+		}
+		fmt.Fprintf(out, "\n  retrying download (%d/%d): %v\n", attempt+1, attempts, err)
+		time.Sleep(time.Duration(attempt) * time.Second)
 	}
-	return lastErr
 }
 
 type downloadStatusError struct {

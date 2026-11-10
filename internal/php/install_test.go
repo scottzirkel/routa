@@ -201,6 +201,97 @@ func TestInstallExtensionSkipsMissingArtifact(t *testing.T) {
 	}
 }
 
+func TestDownloadAndExtractKeepsInstalledFileWhenDownloadFails(t *testing.T) {
+	archive := testTarGz(t, "new php")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "999999")
+		_, _ = w.Write(archive[:len(archive)/2])
+	}))
+	defer server.Close()
+
+	dest := filepath.Join(t.TempDir(), "php-fpm")
+	if err := os.WriteFile(dest, []byte("installed php"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := downloadAndExtract(context.Background(), server.URL, dest, io.Discard); err == nil {
+		t.Fatal("expected error")
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "installed php" {
+		t.Fatalf("installed binary changed to %q after a failed download", data)
+	}
+	if _, err := os.Stat(dest + ".download"); !os.IsNotExist(err) {
+		t.Fatalf("temporary download left behind: %v", err)
+	}
+}
+
+func TestInstallRemovesNewVersionDirWhenDownloadFails(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	rel := Release{Version: Version{8, 4, 99}, CLIURL: server.URL, FPMURL: server.URL}
+	if err := Install(context.Background(), rel, io.Discard); err == nil {
+		t.Fatal("expected error")
+	}
+	if _, err := os.Stat(versionDir("8.4.99")); !os.IsNotExist(err) {
+		t.Fatalf("half-installed version dir left behind: %v", err)
+	}
+}
+
+func TestInstallKeepsExistingVersionWhenReinstallFails(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	fpm := filepath.Join(versionDir("8.4.20"), "bin", "php-fpm")
+	if err := os.MkdirAll(filepath.Dir(fpm), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fpm, []byte("installed fpm"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rel := Release{Version: Version{8, 4, 20}, CLIURL: server.URL, FPMURL: server.URL}
+	if err := Install(context.Background(), rel, io.Discard); err == nil {
+		t.Fatal("expected error")
+	}
+	data, err := os.ReadFile(fpm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "installed fpm" {
+		t.Fatalf("php-fpm = %q after a failed reinstall", data)
+	}
+}
+
+func TestInstallExtensionKeepsInstalledExtensionWhenArtifactIsMissing(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	t.Setenv("ROUTA_PHP_EXT_BASE_URL", server.URL)
+
+	so := XdebugExtension.Path("8.4.20")
+	if err := os.MkdirAll(filepath.Dir(so), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(so, []byte("installed xdebug"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallExtension(context.Background(), XdebugExtension, "8.4.20", io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(so)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "installed xdebug" {
+		t.Fatalf("xdebug.so = %q after a missing artifact", data)
+	}
+}
+
 func testTarGz(t *testing.T, content string) []byte {
 	t.Helper()
 	var buf bytes.Buffer

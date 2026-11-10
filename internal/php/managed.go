@@ -93,10 +93,8 @@ func InstallExtension(ctx context.Context, ext ManagedExtension, version string,
 	if err := downloadAndExtract(ctx, url, dest, out); err != nil {
 		var status downloadStatusError
 		if errors.As(err, &status) && status.Code == http.StatusNotFound {
-			_ = os.Remove(dest)
 			return false, nil
 		}
-		_ = os.Remove(dest)
 		return false, err
 	}
 	return true, nil
