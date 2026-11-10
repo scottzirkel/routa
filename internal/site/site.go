@@ -62,6 +62,7 @@ type Resolved struct {
 	PHP           string // resolved version (Link.PHP or DefaultPHP)
 	Secure        bool
 	AliasOf       string
+	WorktreeOf    string // parent site when this is a git worktree of it
 	EnvFile       string
 	Driver        string
 	ServerEnvFile string
@@ -146,9 +147,28 @@ func normalizeLoadedState(s *State) error {
 }
 
 // Resolve walks parked dirs and merges explicit links. Links override.
+// Aliases and git worktrees only fill names nothing else claims.
 func (s *State) Resolve() []Resolved {
+	sources := s.sources()
 	seen := map[string]Resolved{}
+	for name, src := range sources {
+		seen[name] = build(src.name, src.path, src.root, src.target, src.php, src.secure, s.DefaultPHP)
+	}
+	s.resolveAliases(seen)
+	s.resolveWorktrees(seen, sources)
 
+	out := make([]Resolved, 0, len(seen))
+	for _, r := range seen {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// sources lists parked and linked sites by name before detection, with
+// links overriding parked entries of the same name.
+func (s *State) sources() map[string]siteSource {
+	out := map[string]siteSource{}
 	for _, dir := range s.Parked {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -166,22 +186,16 @@ func (s *State) Resolve() []Resolved {
 			if s.Ignores(name) {
 				continue
 			}
-			p := filepath.Join(dir, e.Name())
-			r := build(name, p, root, "", "", true, s.DefaultPHP)
-			seen[r.Name] = r
+			out[name] = siteSource{name: name, path: filepath.Join(dir, e.Name()), root: root, secure: true}
 		}
 	}
 	for _, l := range s.Links {
-		r := build(l.Name, l.Path, l.Root, l.Target, l.PHP, l.Secure, s.DefaultPHP)
-		seen[r.Name] = r
+		src := siteSource{name: l.Name, path: l.Path, root: l.Root, target: l.Target, php: l.PHP, secure: l.Secure}
+		if l.Target != "" {
+			src.path = ""
+		}
+		out[l.Name] = src
 	}
-	s.resolveAliases(seen)
-
-	out := make([]Resolved, 0, len(seen))
-	for _, r := range seen {
-		out = append(out, r)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 

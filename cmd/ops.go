@@ -176,6 +176,7 @@ type statusSite struct {
 	Docroot       string    `json:"docroot"`
 	Target        string    `json:"target"`
 	AliasOf       string    `json:"alias_of"`
+	WorktreeOf    string    `json:"worktree_of,omitempty"`
 	EnvFile       string    `json:"env_file,omitempty"`
 	Driver        string    `json:"driver,omitempty"`
 	ServerEnvFile string    `json:"server_env_file,omitempty"`
@@ -242,6 +243,7 @@ func renderStatusJSON(cmd *cobra.Command, s *site.State, sites []site.Resolved, 
 			Docroot:       r.Docroot,
 			Target:        r.Target,
 			AliasOf:       r.AliasOf,
+			WorktreeOf:    r.WorktreeOf,
 			EnvFile:       r.EnvFile,
 			Driver:        r.Driver,
 			ServerEnvFile: r.ServerEnvFile,
@@ -255,6 +257,9 @@ func renderStatusJSON(cmd *cobra.Command, s *site.State, sites []site.Resolved, 
 func resolvedSiteSource(s *site.State, r site.Resolved) string {
 	if r.AliasOf != "" {
 		return "alias"
+	}
+	if r.WorktreeOf != "" {
+		return "worktree"
 	}
 	for _, l := range s.Links {
 		if l.Name == r.Name {
