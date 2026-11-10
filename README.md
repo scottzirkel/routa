@@ -616,7 +616,11 @@ they do not start, stop, or write into system database services such as
 Linux server archive into `~/.local/share/routa/binaries/mysql/` and uses that
 routa-owned `mysqld` before considering anything from the system. If the MySQL
 runtime needs OS shared libraries, routa prints the package command to install
-them. For other engines, routa searches common versioned binary names and paths
+them. The `mysql` client in MySQL 8.0's archive is linked against ncurses 5,
+which current distros no longer ship. When that client cannot start, routa
+links the system's ncurses 6 into the archive's own `lib/private` directory,
+which only that install uses, during `routa db install` or `routa db start`.
+For other engines, routa searches common versioned binary names and paths
 first (`postgres-16`, `/usr/lib/postgresql/16/bin/postgres`, `mariadbd-11.4`,
 and similar), then falls back to the unversioned binary only when its
 `--version` output matches the requested version. MySQL must resolve to an

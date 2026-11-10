@@ -35,6 +35,7 @@ func InstallMySQL(ctx context.Context, spec string, out io.Writer) (*MySQLReleas
 	}
 	if _, err := os.Stat(ManagedMySQLBinaryPath(spec)); err == nil {
 		fmt.Fprintf(out, "already installed mysql %s at %s\n", spec, ManagedMySQLBinaryPath(spec))
+		warnIfMySQLClientBroken(spec, out)
 		return &MySQLRelease{Version: spec}, nil
 	}
 
@@ -54,6 +55,7 @@ func InstallMySQL(ctx context.Context, spec string, out io.Writer) (*MySQLReleas
 			return nil, err
 		}
 		fmt.Fprintf(out, "already installed mysql %s at %s\n", release.Version, ManagedMySQLBinaryPath(release.Version))
+		warnIfMySQLClientBroken(release.Version, out)
 		return release, nil
 	}
 
@@ -63,7 +65,16 @@ func InstallMySQL(ctx context.Context, spec string, out io.Writer) (*MySQLReleas
 	if err := refreshManagedMySQLAlias(spec, release.Version); err != nil {
 		return nil, err
 	}
+	warnIfMySQLClientBroken(release.Version, out)
 	return release, nil
+}
+
+// warnIfMySQLClientBroken repairs the bundled mysql client when it can, and
+// only warns when it cannot: the server runs without it.
+func warnIfMySQLClientBroken(version string, out io.Writer) {
+	if err := EnsureMySQLClientRuns(version, out); err != nil {
+		fmt.Fprintf(out, "warning: the bundled mysql client cannot start, so routa will use a mysql or mariadb client from PATH instead: %v\n", err)
+	}
 }
 
 func FetchMySQLReleases(ctx context.Context, spec string) ([]MySQLRelease, error) {
