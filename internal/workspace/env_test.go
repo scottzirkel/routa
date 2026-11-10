@@ -11,7 +11,7 @@ func TestParseEnvHandlesQuotesCommentsAndExport(t *testing.T) {
 		"# comment",
 		"APP_NAME=\"My App\"",
 		"export DB_DATABASE=shop",
-		"DB_PASSWORD='p#ss'",
+		"APP_TAGLINE='one#two'",
 		"DB_HOST=127.0.0.1 # local",
 		"EMPTY=",
 		"",
@@ -19,7 +19,7 @@ func TestParseEnvHandlesQuotesCommentsAndExport(t *testing.T) {
 	want := map[string]string{
 		"APP_NAME":    "My App",
 		"DB_DATABASE": "shop",
-		"DB_PASSWORD": "p#ss",
+		"APP_TAGLINE": "one#two",
 		"DB_HOST":     "127.0.0.1",
 		"EMPTY":       "",
 	}

@@ -25,9 +25,9 @@ func TestTableColumnsAndCopyScript(t *testing.T) {
 }
 
 func TestParseConnectionsIgnoresOutputBeforeTheMarker(t *testing.T) {
-	out := "Deprecated: something\n" + connectionsMarker + `[{"name":"mysql","driver":"mysql","host":"127.0.0.1","port":"3310","database":"testing_5194","username":"u","password":"p"}]` + "\n"
+	out := "Deprecated: something\n" + connectionsMarker + `[{"name":"mysql","driver":"mysql","host":"127.0.0.1","port":"3310","database":"testing_5194","username":"u","password":"fixture"}]` + "\n"
 	conns, err := ParseConnections(out)
-	if err != nil || len(conns) != 1 || conns[0].Database != "testing_5194" || conns[0].Password != "p" {
+	if err != nil || len(conns) != 1 || conns[0].Database != "testing_5194" || conns[0].Password != "fixture" {
 		t.Fatalf("conns = %#v, %v", conns, err)
 	}
 	if _, err := ParseConnections("Fatal error"); err == nil {
