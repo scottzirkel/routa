@@ -208,3 +208,68 @@ func write(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestDetectForPHPSitePrefersArtisanDev(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "artisan"), "")
+	write(t, filepath.Join(dir, "package.json"), `{"scripts":{"dev":"vite"}}`)
+
+	spec, ok := DetectForPHPSite(dir, func() bool { return true })
+	if !ok {
+		t.Fatal("expected a dev command")
+	}
+	if want := []string{"php", "artisan", "dev"}; spec.Kind != "laravel" || !reflect.DeepEqual(spec.Command, want) {
+		t.Fatalf("spec = %#v", spec)
+	}
+}
+
+func TestDetectForPHPSiteFallsBackToViteWithoutArtisanDev(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "artisan"), "")
+	write(t, filepath.Join(dir, "package.json"), `{"scripts":{"dev":"vite"}}`)
+
+	spec, ok := DetectForPHPSite(dir, func() bool { return false })
+	if !ok {
+		t.Fatal("expected a dev command")
+	}
+	if want := []string{"npm", "run", "dev"}; !reflect.DeepEqual(spec.Command, want) {
+		t.Fatalf("command = %#v, want %#v", spec.Command, want)
+	}
+	if spec.DefaultPort != 0 {
+		t.Fatalf("PHP sites never proxy, so no port should be set: %#v", spec)
+	}
+}
+
+func TestDetectForPHPSiteOnlyAsksArtisanWhenItExists(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "package.json"), `{"scripts":{"dev":"vite"}}`)
+
+	asked := false
+	if _, ok := DetectForPHPSite(dir, func() bool { asked = true; return true }); !ok {
+		t.Fatal("expected a dev command")
+	}
+	if asked {
+		t.Fatal("artisan was queried in a directory without an artisan file")
+	}
+}
+
+func TestDetectForPHPSiteWithNothingToRun(t *testing.T) {
+	if spec, ok := DetectForPHPSite(t.TempDir(), func() bool { return false }); ok {
+		t.Fatalf("spec = %#v, want none", spec)
+	}
+}
+
+func TestArtisanListHasCommandMatchesWholeNames(t *testing.T) {
+	raw := "about              Display basic information about your application\n" +
+		"db:show            Display information about the given database\n" +
+		"down               Put the application into maintenance mode\n"
+	if ArtisanListHasCommand(raw, "dev") {
+		t.Fatal("dev matched a list without it")
+	}
+	if !ArtisanListHasCommand(raw+"dev                Run the development server\n", "dev") {
+		t.Fatal("dev not found")
+	}
+	if ArtisanListHasCommand("dev:tools  something\n", "dev") {
+		t.Fatal("dev matched a longer command name")
+	}
+}

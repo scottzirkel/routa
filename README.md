@@ -454,7 +454,10 @@ intermediate certificate.
 ## Running dev servers
 
 For process-backed apps, `routa dev` starts the app's normal dev server, waits
-for the port, and registers the same WebSocket-friendly reverse proxy:
+for the port, and registers the same WebSocket-friendly reverse proxy. When
+the dev server stops, routa removes the proxy and puts back whatever the site
+was before, such as a tracked static site or a linked site's docroot and PHP
+version:
 
 ```bash
 cd ~/code/myapp
@@ -467,6 +470,19 @@ routa dev --name custom --port 3000 -- ./scripts/start-web
 Detected defaults include package manager `dev` scripts, Rails on :3000,
 Phoenix on :4000, and Django on :8000. Pass `--port` for commands that do not
 print or bind a predictable port.
+
+### PHP sites
+
+Inside a PHP site, `routa dev` does not proxy anything. PHP-FPM keeps serving
+the site, and routa runs the app's dev command beside it with the site's PHP
+version on `PATH`:
+
+- Laravel apps that have an `artisan dev` command run `php artisan dev`.
+- Anything else with a package.json `dev` script runs it, usually Vite.
+
+Ctrl+C interrupts the dev server rather than killing it, so Laravel's Vite
+plugin can delete `public/hot` on the way out. A leftover hot file would point
+the site at a Vite server that is no longer running.
 
 ## Redis
 

@@ -33,10 +33,15 @@ var devCmd = &cobra.Command{
 	Short: "Run a detected dev server and proxy <name>.test to it",
 	Long: `Runs a local dev server, waits for its HTTP port, and registers a routa
 reverse proxy so the app is available at https://<name>.test. WebSockets and
-HMR flow through the same proxy.
+HMR flow through the same proxy. When the dev server stops, routa puts the
+site back the way it was before.
 
 Without a command, routa detects common project types such as package.json dev
-scripts, Rails, Phoenix, and Django. For anything else, pass a command after --.`,
+scripts, Rails, Phoenix, and Django. For anything else, pass a command after --.
+
+Inside a PHP site, PHP-FPM keeps serving the site and nothing is proxied.
+routa runs 'php artisan dev' when the Laravel app has it, and otherwise the
+package.json dev script (usually Vite), using the site's PHP version.`,
 	Args: cobra.ArbitraryArgs,
 	RunE: runDev,
 }
@@ -57,6 +62,19 @@ func runDev(_ *cobra.Command, args []string) error {
 	if devName != "" {
 		name = devName
 	}
+
+	// Detected dev servers inside a PHP site run beside PHP-FPM. Proxying
+	// them would replace the PHP app with Vite's asset server.
+	if len(args) == 0 || (len(args) == 1 && devName == "") {
+		sites, err := phpSitesForDir(cwd)
+		if err != nil {
+			return err
+		}
+		if len(sites) > 0 {
+			return runDevBesidePHP(sites)
+		}
+	}
+
 	var command []string
 	var kind string
 	defaultPort := 0
@@ -98,9 +116,7 @@ func runDev(_ *cobra.Command, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
-	cmd.Dir = cwd
-	cmd.Stdin = os.Stdin
+	cmd := devCommand(ctx, cwd, command, os.Environ())
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -129,11 +145,13 @@ func runDev(_ *cobra.Command, args []string) error {
 		return err
 	}
 	target := fmt.Sprintf("127.0.0.1:%d", port)
-	if err := registerDevProxy(name, target); err != nil {
+	previous, err := registerDevProxy(name, target)
+	if err != nil {
 		_ = terminateProcess(cmd.Process)
 		<-exited
 		return err
 	}
+	defer restoreAfterDev(name, target, previous)
 
 	label := kind
 	if label == "" {
@@ -148,13 +166,157 @@ func runDev(_ *cobra.Command, args []string) error {
 	return err
 }
 
-func registerDevProxy(name, target string) error {
+// devCommand builds the dev server process. Ctrl+C already reaches the child
+// through the terminal, so cancelling interrupts it instead of killing it:
+// dev servers clean up on interrupt, and Laravel's Vite plugin deletes
+// public/hot then. A leftover hot file points the site at a dead server.
+// The child is killed only if it ignores the interrupt.
+func devCommand(ctx context.Context, dir string, command, env []string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	cmd.Dir = dir
+	cmd.Env = env
+	cmd.Stdin = os.Stdin
+	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	cmd.WaitDelay = 10 * time.Second
+	return cmd
+}
+
+// phpSitesForDir returns the PHP sites that serve dir, if any.
+func phpSitesForDir(dir string) ([]site.Resolved, error) {
 	s, err := site.Load()
 	if err != nil {
+		return nil, err
+	}
+	var out []site.Resolved
+	for _, r := range s.ResolvePath(dir) {
+		if r.Kind == site.KindPHP {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// runDevBesidePHP runs a PHP site's dev command in the foreground. PHP-FPM
+// keeps serving the site, so nothing is proxied and the site config is left
+// alone.
+func runDevBesidePHP(sites []site.Resolved) error {
+	dir := sites[0].Path
+	phpCtx, phpErr := currentPHPContext()
+	spec, ok := dev.DetectForPHPSite(dir, func() bool {
+		return phpCtx != nil && artisanHasCommand(phpCtx, dir, "dev")
+	})
+	if !ok {
+		return fmt.Errorf("%s is a PHP site that routa already serves at %s; found no 'artisan dev' command or package.json dev script to run beside it", dir, siteURLs(sites))
+	}
+
+	command := append([]string(nil), spec.Command...)
+	env := os.Environ()
+	if phpCtx != nil {
+		env = envWithRoutaPHP(phpCtx)
+	}
+	if command[0] == "php" {
+		if phpCtx == nil {
+			return phpErr
+		}
+		command[0] = phpCtx.Bin
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	cmd := devCommand(ctx, dir, command, env)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	fmt.Printf("dev %s: %s stays on PHP-FPM; running %s beside it\n", spec.Kind, siteURLs(sites), strings.Join(spec.Command, " "))
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		if exit, ok := err.(*exec.ExitError); ok {
+			return childExitError{code: exit.ExitCode()}
+		}
 		return err
 	}
+	return nil
+}
+
+func siteURLs(sites []site.Resolved) string {
+	urls := make([]string, 0, len(sites))
+	for _, r := range sites {
+		scheme := "https"
+		if !r.Secure {
+			scheme = "http"
+		}
+		urls = append(urls, fmt.Sprintf("%s://%s.test", scheme, r.Name))
+	}
+	return strings.Join(urls, ", ")
+}
+
+// artisanHasCommand asks the app's artisan for its command list. Booting the
+// app can fail (a broken .env, missing vendor/), which reads as "no".
+func artisanHasCommand(phpCtx *phpCLIContext, dir, name string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, phpCtx.Bin, "artisan", "list", "--raw")
+	cmd.Dir = dir
+	cmd.Env = envWithRoutaPHP(phpCtx)
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return dev.ArtisanListHasCommand(string(out), name)
+}
+
+// registerDevProxy points name.test at the dev server and returns the link it
+// replaced, if any, so the site can be restored when the server stops.
+func registerDevProxy(name, target string) (*site.Link, error) {
+	s, err := site.Load()
+	if err != nil {
+		return nil, err
+	}
+	previous := findLink(s, name)
 	site.AddLink(s, site.Link{Name: name, Target: target, Secure: true})
-	return commitAndReload(s, fmt.Sprintf("proxy %s.test → %s", name, target))
+	return previous, commitAndReload(s, fmt.Sprintf("proxy %s.test → %s", name, target))
+}
+
+func restoreAfterDev(name, target string, previous *site.Link) {
+	s, err := site.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not restore %s.test: %v\n", name, err)
+		return
+	}
+	msg, changed := restoreDevLink(s, name, target, previous)
+	if !changed {
+		return
+	}
+	if err := commitAndReload(s, msg); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not restore %s.test: %v\n", name, err)
+	}
+}
+
+// restoreDevLink undoes registerDevProxy. It leaves the site alone when
+// something else changed it while the dev server ran.
+func restoreDevLink(s *site.State, name, target string, previous *site.Link) (string, bool) {
+	current := findLink(s, name)
+	if current == nil || current.Target != target {
+		return "", false
+	}
+	if previous != nil {
+		site.AddLink(s, *previous)
+		return fmt.Sprintf("restored %s.test to its previous config", name), true
+	}
+	site.RemoveLink(s, name)
+	return fmt.Sprintf("removed dev proxy %s.test", name), true
+}
+
+func findLink(s *site.State, name string) *site.Link {
+	for _, l := range s.Links {
+		if l.Name == name {
+			found := l
+			return &found
+		}
+	}
+	return nil
 }
 
 var portRE = regexp.MustCompile(`(?i)(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?:[^\d\n]*):([1-9][0-9]{1,4})|(?:^|\s):([1-9][0-9]{1,4})`)

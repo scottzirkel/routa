@@ -30,6 +30,34 @@ func Detect(dir string) (Spec, error) {
 	return Spec{}, fmt.Errorf("no dev server detected in %s; pass a command after --", dir)
 }
 
+// DetectForPHPSite picks the command to run beside a PHP site. PHP-FPM keeps
+// serving the site, so this command is never proxied: it only builds assets or
+// runs workers. Laravel apps that ship an `artisan dev` command use it, and
+// anything else with a package.json dev script (usually Vite) runs that.
+// hasArtisanDev is only called when the directory has an artisan file.
+func DetectForPHPSite(dir string, hasArtisanDev func() bool) (Spec, bool) {
+	if exists(filepath.Join(dir, "artisan")) && hasArtisanDev() {
+		return Spec{Kind: "laravel", Command: []string{"php", "artisan", "dev"}}, true
+	}
+	if spec, ok := detectNode(dir); ok {
+		spec.DefaultPort = 0
+		return spec, true
+	}
+	return Spec{}, false
+}
+
+// ArtisanListHasCommand reports whether `php artisan list --raw` output names
+// the given command. Each raw line starts with the command name.
+func ArtisanListHasCommand(raw, name string) bool {
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == name {
+			return true
+		}
+	}
+	return false
+}
+
 func detectNode(dir string) (Spec, bool) {
 	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
 	if err != nil {
