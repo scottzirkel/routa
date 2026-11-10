@@ -103,7 +103,7 @@ routa track / untrack / ignore / unignore / link / unlink / alias / unalias / is
 routa proxy <name> <port>       # reverse-proxy <name>.test → 127.0.0.1:<port>
 routa dev [name]                # run a detected dev server and proxy it
 routa workspace add <name>      # git worktree of this site at <site>-<name>.test
-routa workspace list [--json] / rm <name>
+routa workspace list [--json] / rm <name> / prune [--dry-run]
 routa redis start [--port 6380] / stop / restart / status
 routa mail start on 8026 --smtp-port 1026 / stop / restart / status / proxy
 routa db start mariadb 11.4 on 3307
@@ -503,6 +503,7 @@ routa workspace add login --branch fix/login --from origin/main
 routa workspace add 5195 --database empty   # fresh database, migrated
 routa workspace list
 routa workspace rm 5194 --drop-database
+routa workspace prune --dry-run             # test databases left by removed worktrees
 ```
 
 `add` creates the worktree beside the repository and serves it at
@@ -555,12 +556,21 @@ that version.
 
 `rm` removes the worktree and stops serving it. git refuses when the worktree
 has changes or untracked files unless you pass `--force`; ignored files such as
-`vendor/` do not count. The branch is kept. The workspace's test databases are
-dropped: routa asks the app (with `APP_ENV=testing`) for its test connections
-and drops each database named with the workspace name, plus its `_test_N`
-copies, on servers on this machine. The workspace's dev database is kept unless
-you pass `--drop-database`; routa never drops the parent's. A SQLite file goes
-with the worktree.
+`vendor/` do not count. The branch is kept. The workspace's dev database is kept
+unless you pass `--drop-database`; routa never drops the parent's. A SQLite file
+goes with the worktree.
+
+After removing the worktree, `rm` drops the test databases that removed
+worktrees left behind, including this one's. `routa workspace prune` does the
+same on demand, for worktrees removed another way, such as with
+`git worktree remove`; `--dry-run` only lists them. A test database counts as
+left behind when it is named after one of the main checkout's test databases
+plus a worktree name, such as `testing_4764`, and no current worktree has that
+name. Its `_test_N` copies go with it. routa learns the test servers and names
+by booting the main checkout's app with `APP_ENV=testing`, and only touches
+servers on this machine. The main checkout's own test databases, and any
+database a current checkout's `.env` or `.env.testing` names, are never
+dropped.
 
 routa also serves git worktrees it did not create, such as the ones coding
 agents make inside a repository. A worktree at

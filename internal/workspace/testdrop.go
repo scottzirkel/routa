@@ -56,18 +56,17 @@ func ParseConnections(output string) ([]Connection, error) {
 	return conns, nil
 }
 
-// TestServer is a database server and the workspace test databases on it.
+// TestServer is a local database server the app's tests use, with the main
+// checkout's test database names on it, such as testing.
 type TestServer struct {
-	Via   Database // connection details, without a database name
-	Bases []string // base test database names with the workspace suffix
+	Via       Database // connection details, without a database name
+	Templates []string // the main checkout's test database names
 }
 
-// WorkspaceTestServers picks the connections whose database ends with the
-// workspace suffix, the names PlanTestEnv gave them, grouped by server. Only
+// TestServers groups the app's test connections by server. Only
 // MySQL-protocol servers on this machine count, so cleanup can never reach a
-// remote database or one that is not the workspace's.
-func WorkspaceTestServers(conns []Connection, suffix string) []TestServer {
-	suffix = "_" + strings.ReplaceAll(suffix, "-", "_")
+// remote database.
+func TestServers(conns []Connection) []TestServer {
 	byServer := map[string]*TestServer{}
 	var order []string
 	for _, c := range conns {
@@ -76,7 +75,7 @@ func WorkspaceTestServers(conns []Connection, suffix string) []TestServer {
 		default:
 			continue
 		}
-		if !localHost(c.Host) || !strings.HasSuffix(c.Database, suffix) || c.Database == suffix {
+		if !localHost(c.Host) || !plainDatabaseName(c.Database) {
 			continue
 		}
 		host := c.Host
@@ -90,32 +89,62 @@ func WorkspaceTestServers(conns []Connection, suffix string) []TestServer {
 			byServer[key] = s
 			order = append(order, key)
 		}
-		if !contains(s.Bases, c.Database) {
-			s.Bases = append(s.Bases, c.Database)
+		if !contains(s.Templates, c.Database) {
+			s.Templates = append(s.Templates, c.Database)
 		}
 	}
 	out := make([]TestServer, 0, len(order))
 	for _, key := range order {
-		sort.Strings(byServer[key].Bases)
+		sort.Strings(byServer[key].Templates)
 		out = append(out, *byServer[key])
 	}
 	return out
 }
 
-// TestDatabasesToDrop picks each base and its parallel copies (base_test_N)
-// from the databases that exist, matching names exactly.
-func TestDatabasesToDrop(bases, existing []string) []string {
-	var drop []string
+var (
+	testCopyRE = regexp.MustCompile(`_test_\d+$`)
+	suffixRE   = regexp.MustCompile(`^[a-z0-9_]+$`)
+)
+
+// StaleTestDatabases picks the test databases that worktrees left behind:
+// <template>_<suffix>, where template is one of the main checkout's test
+// database names, and its _test_N parallel copies, when no current worktree
+// has that suffix and no checkout's .env files name the database. The main
+// checkout's own databases are never picked.
+func StaleTestDatabases(existing, templates []string, liveSuffixes, liveNames map[string]bool) []string {
+	var stale []string
 	for _, db := range existing {
-		for _, base := range bases {
-			if db == base || regexp.MustCompile(`^`+regexp.QuoteMeta(base)+`_test_\d+$`).MatchString(db) {
-				drop = append(drop, db)
-				break
+		base := testCopyRE.ReplaceAllString(db, "")
+		if liveNames[base] || contains(templates, base) {
+			continue
+		}
+		matched, live := false, false
+		for _, t := range templates {
+			suffix, ok := strings.CutPrefix(base, t+"_")
+			if !ok || !suffixRE.MatchString(suffix) {
+				continue
+			}
+			matched = true
+			if liveSuffixes[suffix] {
+				live = true
 			}
 		}
+		if matched && !live {
+			stale = append(stale, db)
+		}
 	}
-	sort.Strings(drop)
-	return drop
+	sort.Strings(stale)
+	return stale
+}
+
+// GroupTestSets counts databases per base name, folding _test_N copies into
+// their base, for reporting.
+func GroupTestSets(dbs []string) map[string]int {
+	sets := map[string]int{}
+	for _, db := range dbs {
+		sets[testCopyRE.ReplaceAllString(db, "")]++
+	}
+	return sets
 }
 
 // ListDatabases returns the databases on a MySQL-protocol server.

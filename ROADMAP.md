@@ -19,7 +19,9 @@ Herd 2 parity work (Herd 2.0 shipped in October 2026 for macOS and Windows).
   stay on the server (schema dump, then `INSERT … SELECT` per table), and
   `aff_main` copies are named `aff_<name>`. The copied `.env.testing` gets
   the workspace name on every test database and its own Redis database
-  numbers, and `rm` drops the workspace's test databases.
+  numbers. `rm` and the new `routa workspace prune` drop the test databases
+  that removed worktrees left behind, such as `testing_4764` and its
+  `_test_N` copies.
 - **Git worktree subdomains** — worktrees routa did not create, such as the
   ones coding agents keep inside a repository, are served at
   `<site>-<folder>.test`. Worktrees a tracked directory already serves keep

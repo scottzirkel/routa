@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 
@@ -22,6 +23,7 @@ var (
 	workspaceListJSON bool
 	workspaceForce    bool
 	workspaceDropDB   bool
+	workspaceDryRun   bool
 )
 
 var workspaceCmd = &cobra.Command{
@@ -80,14 +82,39 @@ own; a SQLite file goes with the worktree.`,
 	RunE: runWorkspaceRm,
 }
 
+var workspacePruneCmd = &cobra.Command{
+	Use:   "prune",
+	Short: "Drop test databases that removed worktrees left behind",
+	Long: `Drops the test databases of worktrees that no longer exist. 'routa workspace
+rm' does this after every removal; run it yourself after removing a worktree
+another way, such as with 'git worktree remove'.
+
+A database counts as left behind when it is named <test database>_<name>, such
+as testing_4764, after one of the main checkout's test databases, and no
+current worktree has that name. Its _test_N parallel copies go with it. The
+main checkout's own test databases, and any database a current checkout's .env
+or .env.testing names, are never dropped. Only servers on this machine are
+touched. routa learns the servers and names by booting the main checkout's app
+with APP_ENV=testing.`,
+	Args: cobra.NoArgs,
+	RunE: func(_ *cobra.Command, _ []string) error {
+		main, _, _, err := workspaceRepo()
+		if err != nil {
+			return err
+		}
+		return pruneStaleTestDatabases(main, workspaceDryRun)
+	},
+}
+
 func init() {
+	workspacePruneCmd.Flags().BoolVar(&workspaceDryRun, "dry-run", false, "list what would be dropped without dropping it")
 	workspaceAddCmd.Flags().StringVar(&workspaceBranch, "branch", "", "branch to create or check out (default: the workspace name)")
 	workspaceAddCmd.Flags().StringVar(&workspaceFrom, "from", "", "commit or branch the new branch starts from (default: HEAD)")
 	workspaceAddCmd.Flags().StringVar(&workspaceDatabase, "database", "clone", "clone or empty")
 	workspaceListCmd.Flags().BoolVar(&workspaceListJSON, "json", false, "emit machine-readable JSON")
 	workspaceRmCmd.Flags().BoolVar(&workspaceForce, "force", false, "remove even with uncommitted changes or untracked files")
 	workspaceRmCmd.Flags().BoolVar(&workspaceDropDB, "drop-database", false, "drop the workspace's own database")
-	workspaceCmd.AddCommand(workspaceAddCmd, workspaceListCmd, workspaceRmCmd)
+	workspaceCmd.AddCommand(workspaceAddCmd, workspaceListCmd, workspaceRmCmd, workspacePruneCmd)
 	rootCmd.AddCommand(workspaceCmd)
 }
 
@@ -545,7 +572,6 @@ func runWorkspaceRm(_ *cobra.Command, args []string) error {
 
 	// Read the workspace's databases before git deletes its .env files.
 	drop := workspaceServerDatabase(main, target.Path)
-	testDrops := planWorkspaceTestDrops(target.Path, want)
 
 	if err := workspace.RemoveWorktree(main, target.Path, workspaceForce); err != nil {
 		return err
@@ -565,12 +591,8 @@ func runWorkspaceRm(_ *cobra.Command, args []string) error {
 		}
 		fmt.Printf("→ dropped database %s\n", drop.name)
 	}
-	for _, d := range testDrops {
-		if err := workspace.DropDatabases(d.server.Via, d.tools, d.names); err != nil {
-			fmt.Fprintf(os.Stderr, "  warning: drop test databases on %s:%s: %v\n", d.server.Via.Host, d.server.Via.Port, err)
-			continue
-		}
-		fmt.Printf("→ dropped %d test databases on %s:%s (%s)\n", len(d.names), d.server.Via.Host, d.server.Via.Port, strings.Join(d.server.Bases, ", "))
+	if err := pruneStaleTestDatabases(main, false); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: test database cleanup: %v\n", err)
 	}
 	if err := commitAndReload(st, fmt.Sprintf("stopped serving workspace %s", want)); err != nil {
 		return err
@@ -600,59 +622,96 @@ func workspaceServerDatabase(main, wtPath string) serverDatabase {
 	return serverDatabase{name: own.Name, via: parent.Database}
 }
 
-type testDrop struct {
-	server workspace.TestServer
-	tools  services.DatabaseTools
-	names  []string
-}
-
-// planWorkspaceTestDrops finds the workspace's test databases: those named
-// with its suffix, plus their parallel copies, on servers on this machine.
-// It boots the app with APP_ENV=testing to learn every test connection,
-// including defaults from config/database.php that .env.testing leaves out.
-// Anything it cannot read becomes a warning, so removing a broken worktree
-// still works.
-func planWorkspaceTestDrops(wtPath, suffix string) []testDrop {
-	if !fileExists(filepath.Join(wtPath, "artisan")) || !fileExists(filepath.Join(wtPath, "vendor", "autoload.php")) {
+// pruneStaleTestDatabases drops the test databases that worktrees left
+// behind, after pruning git's records of worktrees whose folders are gone. It
+// boots the main checkout's app with APP_ENV=testing to learn which local
+// servers its tests use and the test database names worktrees derive theirs
+// from. With dryRun it only reports.
+func pruneStaleTestDatabases(main string, dryRun bool) error {
+	if !dryRun {
+		if err := workspace.PruneWorktrees(main); err != nil {
+			return err
+		}
+	}
+	if !fileExists(filepath.Join(main, "artisan")) || !fileExists(filepath.Join(main, "vendor", "autoload.php")) {
 		return nil
 	}
+	wts, err := workspace.ListWorktrees(main)
+	if err != nil {
+		return err
+	}
+	liveSuffixes := map[string]bool{}
+	liveNames := map[string]bool{}
+	checkouts := []string{main}
+	for _, wt := range wts {
+		if !fileExists(wt.Path) {
+			continue // its folder is gone; git prune drops the record
+		}
+		liveSuffixes[strings.ReplaceAll(site.WorktreeSuffix(main, wt.Path), "-", "_")] = true
+		checkouts = append(checkouts, wt.Path)
+	}
+	for _, dir := range checkouts {
+		for _, file := range []string{".env", ".env.testing"} {
+			for key, value := range readEnvFile(filepath.Join(dir, file)) {
+				if strings.HasPrefix(key, "DB_") && strings.HasSuffix(key, "DATABASE") {
+					liveNames[value] = true
+				}
+			}
+		}
+	}
+
 	self, err := os.Executable()
 	if err != nil {
-		return nil
+		return err
 	}
 	cmd := exec.Command(self, "php", "-r", workspace.LaravelConnectionsScript)
-	cmd.Dir = wtPath
+	cmd.Dir = main
 	cmd.Env = append(os.Environ(), "APP_ENV=testing")
-	out, err := cmd.Output()
-	conns, parseErr := workspace.ParseConnections(string(out))
-	if err != nil || parseErr != nil {
-		fmt.Fprintf(os.Stderr, "  warning: could not read the app's test connections, so its test databases are kept: %v\n", firstErr(err, parseErr))
-		return nil
+	out, runErr := cmd.Output()
+	conns, err := workspace.ParseConnections(string(out))
+	if err != nil {
+		if runErr != nil {
+			err = runErr
+		}
+		return fmt.Errorf("could not read the app's test connections: %w", err)
 	}
-	var drops []testDrop
-	for _, server := range workspace.WorkspaceTestServers(conns, suffix) {
-		tools, err := databaseToolsFor(server.Via)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  warning: %v\n", err)
-			continue
-		}
-		existing, err := workspace.ListDatabases(server.Via, tools)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  warning: list databases on %s:%s: %v\n", server.Via.Host, server.Via.Port, err)
-			continue
-		}
-		if names := workspace.TestDatabasesToDrop(server.Bases, existing); len(names) > 0 {
-			drops = append(drops, testDrop{server: server, tools: tools, names: names})
-		}
-	}
-	return drops
-}
 
-func firstErr(errs ...error) error {
-	for _, err := range errs {
+	verb := "dropped"
+	if dryRun {
+		verb = "would drop"
+	}
+	found := false
+	for _, server := range workspace.TestServers(conns) {
+		tools, err := databaseToolsFor(server.Via)
 		if err != nil {
 			return err
 		}
+		existing, err := workspace.ListDatabases(server.Via, tools)
+		if err != nil {
+			return fmt.Errorf("list databases on %s:%s: %w", server.Via.Host, server.Via.Port, err)
+		}
+		stale := workspace.StaleTestDatabases(existing, server.Templates, liveSuffixes, liveNames)
+		if len(stale) == 0 {
+			continue
+		}
+		found = true
+		if !dryRun {
+			if err := workspace.DropDatabases(server.Via, tools, stale); err != nil {
+				return err
+			}
+		}
+		sets := workspace.GroupTestSets(stale)
+		bases := make([]string, 0, len(sets))
+		for base := range sets {
+			bases = append(bases, base)
+		}
+		sort.Strings(bases)
+		for _, base := range bases {
+			fmt.Printf("→ %s %s on %s:%s (%d databases)\n", verb, base, server.Via.Host, server.Via.Port, sets[base])
+		}
+	}
+	if !found && dryRun {
+		fmt.Println("no stale test databases")
 	}
 	return nil
 }

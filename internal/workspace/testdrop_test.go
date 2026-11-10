@@ -35,38 +35,57 @@ func TestParseConnectionsIgnoresOutputBeforeTheMarker(t *testing.T) {
 	}
 }
 
-func TestWorkspaceTestServersOnlyPicksLocalSuffixedDatabases(t *testing.T) {
+func TestTestServersOnlyPicksLocalMySQLProtocolServers(t *testing.T) {
 	conns := []Connection{
-		{Name: "mysql", Driver: "mysql", Host: "127.0.0.1", Port: "3310", Database: "testing_5194", Username: "u"},
-		{Name: "mysql-metrics", Driver: "mysql", Host: "localhost", Port: "3310", Database: "testing_5194", Username: "u"},
-		{Name: "singlestore", Driver: "singlestore", Host: "127.0.0.1", Port: "3307", Database: "affiliate_testing_5194", Username: "root"},
-		{Name: "staging", Driver: "mysql", Host: "staging.example.com", Port: "3306", Database: "staging_5194"},
-		{Name: "main", Driver: "mysql", Host: "127.0.0.1", Port: "3310", Database: "testing"},
-		{Name: "pgsql", Driver: "pgsql", Host: "127.0.0.1", Port: "5432", Database: "testing_5194"},
-		{Name: "sqlite", Driver: "sqlite", Database: "database/testing_5194"},
+		{Name: "mysql", Driver: "mysql", Host: "127.0.0.1", Port: "3310", Database: "testing", Username: "u"},
+		{Name: "mysql-metrics", Driver: "mysql", Host: "localhost", Port: "3310", Database: "testing", Username: "u"},
+		{Name: "singlestore", Driver: "singlestore", Host: "127.0.0.1", Port: "3307", Database: "affiliate_testing", Username: "root"},
+		{Name: "staging", Driver: "mysql", Host: "staging.example.com", Port: "3306", Database: "staging"},
+		{Name: "readonly", Driver: "mysql", Host: "", Port: "3306", Database: ""},
+		{Name: "pgsql", Driver: "pgsql", Host: "127.0.0.1", Port: "5432", Database: "testing"},
+		{Name: "sqlite", Driver: "sqlite", Database: ":memory:"},
 	}
-	got := WorkspaceTestServers(conns, "5194")
+	got := TestServers(conns)
 	if len(got) != 2 {
 		t.Fatalf("servers = %#v", got)
 	}
-	if got[0].Via.Port != "3310" || !reflect.DeepEqual(got[0].Bases, []string{"testing_5194"}) {
+	if got[0].Via.Port != "3310" || !reflect.DeepEqual(got[0].Templates, []string{"testing"}) {
 		t.Fatalf("mysql server = %#v", got[0])
 	}
-	if got[1].Via.Port != "3307" || !reflect.DeepEqual(got[1].Bases, []string{"affiliate_testing_5194"}) || got[1].Via.User != "root" {
+	if got[1].Via.Port != "3307" || !reflect.DeepEqual(got[1].Templates, []string{"affiliate_testing"}) || got[1].Via.User != "root" {
 		t.Fatalf("singlestore server = %#v", got[1])
 	}
 }
 
-func TestTestDatabasesToDropMatchesExactly(t *testing.T) {
+func TestStaleTestDatabases(t *testing.T) {
 	existing := []string{
-		"testing", "testing_test_1",
-		"testing_5194", "testing_5194_test_1", "testing_5194_test_12",
-		"testing_51945", "testing_51945_test_1", "testing_5194_test_x", "testing_5194_copy",
-		"aff_5194",
+		"testing", "testing_test_1", // main's own
+		"testing_5194", "testing_5194_test_1", // live worktree 5194
+		"testing_4764", "testing_4764_test_1", "testing_4764_test_12", // worktree gone
+		"testing_51945",                     // gone too: 51945 is not 5194
+		"testing_ops", "testing_ops_test_1", // gone by suffix, but a checkout's .env.testing names it
+		"testing_x_test_3",        // a copy whose base is already gone
+		"ops_testing", "aff_main", // other naming, never touched
+		"testing_Bad-Name", // not a worktree suffix
 	}
-	got := TestDatabasesToDrop([]string{"testing_5194"}, existing)
-	want := []string{"testing_5194", "testing_5194_test_1", "testing_5194_test_12"}
+	live := map[string]bool{"5194": true}
+	names := map[string]bool{"testing_ops": true}
+	got := StaleTestDatabases(existing, []string{"testing"}, live, names)
+	want := []string{"testing_4764", "testing_4764_test_1", "testing_4764_test_12", "testing_51945", "testing_x_test_3"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("drop = %#v\nwant %#v", got, want)
+		t.Fatalf("stale = %#v\nwant %#v", got, want)
+	}
+	if sets := GroupTestSets(got); sets["testing_4764"] != 3 || sets["testing_x"] != 1 {
+		t.Fatalf("sets = %#v", sets)
+	}
+}
+
+func TestStaleTestDatabasesWithOverlappingTemplates(t *testing.T) {
+	// testing_metrics_5194 belongs to template testing_metrics and live
+	// worktree 5194, even though it also starts with testing_.
+	got := StaleTestDatabases([]string{"testing_metrics", "testing_metrics_5194", "testing_metrics_old"},
+		[]string{"testing", "testing_metrics"}, map[string]bool{"5194": true}, nil)
+	if !reflect.DeepEqual(got, []string{"testing_metrics_old"}) {
+		t.Fatalf("stale = %#v", got)
 	}
 }

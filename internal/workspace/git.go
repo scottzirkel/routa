@@ -90,6 +90,11 @@ func RemoveWorktree(main, path string, force bool) error {
 	return gitRun(main, append(args, path)...)
 }
 
+// PruneWorktrees drops git's records of worktrees whose folders are gone.
+func PruneWorktrees(main string) error {
+	return gitRun(main, "worktree", "prune")
+}
+
 // IsTracked reports whether git tracks path in main.
 func IsTracked(main, path string) bool {
 	return gitOK(main, "ls-files", "--error-unmatch", "--", path)
