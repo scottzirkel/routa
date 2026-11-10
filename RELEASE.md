@@ -98,6 +98,7 @@ The initial release line was reconstructed from the first commits:
 - `v1.10.0`: current-site PHP Xdebug, extension, and ini inspection workflows; optional service port output polish for Mailpit, search, and storage; stateful service backup guidance; Mailpit tag/plus-address inbox guidance; longer local TLS certificates; and more routing edge coverage.
 - `v1.11.0`: managed Xdebug shared-extension installs for PHP versions, glibc static-php-cli PHP builds, current/default-aware `routa php xdebug install`, FPM php.ini rendering for Zend extensions, and Xdebug artifact publishing workflow.
 - `v1.12.0`: managed pcov alongside Xdebug from a new `php-extensions` release, detection of PHP builds that cannot load shared extensions, a dynamically-linked PHP CLI build script, a `php` shim so scripts and editors use routa's PHP, `routa status --json`, Valet-compatible drivers and `.routa-env.php`, wildcard subdomain hosts, recovery from stale database socket locks with `routa db repair`, the dashboard on Bubble Tea v2, and release builds on the newest stable Go.
+- `v1.13.0`: `routa workspace` (`add`, `list`, `fix`, `rm`, `prune`) for git worktrees with their own databases, test databases, and Redis, never sharing the parent's; worktree subdomains; `routa dev` beside PHP-FPM for PHP sites; atomic PHP and extension downloads; more `--json` output; and a working MySQL 8.0 client on current distros.
 
 ## Pending Release Notes
 

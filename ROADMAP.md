@@ -5,24 +5,36 @@ priority, not commitment.
 
 ## Pending release
 
-Herd 2 parity work (Herd 2.0 shipped in October 2026 for macOS and Windows).
+- None.
+
+## Released
+
+### v1.13.0 — Workspaces and Herd 2 parity
+
+Herd 2.0 (October 2026, macOS and Windows) added workspaces for running
+several branches, or coding agents, side by side. This release brings them
+to Linux, with other Herd 2 parity work.
 
 - **Workspaces** — `routa workspace add <name>` creates a git worktree beside
-  the site's repository, served at `<site>-<name>.test` with the parent's
-  docroot, PHP version, and HTTPS setting. It copies the parent's ignored
-  working files (`.env`, `vendor/`, `node_modules/`, build output) with
-  copy-on-write where the filesystem supports it, renames the site's hosts in
-  the new `.env`, and gives the workspace its own MySQL, MariaDB, Postgres,
-  or SQLite database, cloned by default or empty. Workspaces never share the
-  parent's database; `add` refuses when it cannot isolate one, and
-  `routa workspace list` flags worktrees that do. MySQL and MariaDB copies
-  stay on the server (schema dump, then `INSERT … SELECT` per table), and
-  `aff_main` copies are named `aff_<name>`. The copied `.env.testing` gets
-  the workspace name on every test database, and the app and its tests each
-  get their own Redis database numbers; routa's Redis now has 64 databases
-  so there are enough. `rm` and the new `routa workspace prune` drop the test databases
-  that removed worktrees left behind, such as `testing_4764` and its
-  `_test_N` copies.
+  the site's repository, on a new branch from a freshly fetched
+  `origin/main`, served at `<site>-<name>.test` with the parent's docroot,
+  PHP version, and HTTPS setting. It copies what a working copy needs (`.env`
+  files, dependencies, built and published assets, keys, and `.ai/`) with
+  copy-on-write, links `AGENTS.local.md` and `CLAUDE.local.md` to the
+  parent's, and renames the site's hosts in the new `.env`.
+- **Workspaces never share a database** — each gets its own MySQL, MariaDB,
+  Postgres, or SQLite database, cloned by default or empty; MySQL and
+  MariaDB copies stay on the server, and `aff_main` copies are named
+  `aff_<name>`. The copied `.env.testing` gets the workspace name on every
+  test database, and the app and its tests each get their own Redis database
+  numbers; routa's Redis now has 64 databases. `add` refuses what it cannot
+  isolate, and workspaces never change data on a server running on a
+  service's standard port.
+- **Workspace upkeep** — `routa workspace list [--json]` flags worktrees that
+  share a database, test databases, or Redis. `fix <name>` brings a
+  hand-made worktree in line, `rm` removes one, and `rm` and `prune` drop the
+  test databases removed worktrees left behind, on the app's own test
+  servers only. `--site <name>` works from any folder.
 - **Git worktree subdomains** — worktrees routa did not create, such as the
   ones coding agents keep inside a repository, are served at
   `<site>-<folder>.test`. Worktrees a tracked directory already serves keep
@@ -45,8 +57,6 @@ Herd 2 parity work (Herd 2.0 shipped in October 2026 for macOS and Windows).
   longer ship, so it could not start. `routa db install` and `db start` now
   link the system's ncurses 6 into the archive's own `lib/private` directory
   when the client fails, and remove the links again if that does not help.
-
-## Released
 
 ### v1.12.0 — pcov, a php shim, and Valet parity
 
