@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/scottzirkel/routa/internal/services"
@@ -206,4 +207,95 @@ func pipe(dump, restore *exec.Cmd) error {
 		return fmt.Errorf("%s: %w: %s", restore.Args[0], rErr, strings.TrimSpace(restoreErr.String()))
 	}
 	return nil
+}
+
+// ProjectDatabase is the database a checkout's .env points at, resolved far
+// enough to tell whether two checkouts use the same one.
+type ProjectDatabase struct {
+	Database
+	Kind    string // none, sqlite, server, url, or unknown
+	File    string // absolute SQLite path
+	URL     string // DB_URL or DATABASE_URL
+	Problem string // why routa cannot tell, for Kind unknown
+}
+
+// ProjectDatabaseFor reads the database settings of the checkout at dir.
+// With no DB_CONNECTION and no other DB_ settings, a Laravel 11+ app uses
+// database/database.sqlite when it exists.
+func ProjectDatabaseFor(dir string, env map[string]string) ProjectDatabase {
+	p := ProjectDatabase{Database: DatabaseFromEnv(env)}
+	if url := firstNonEmpty(env["DB_URL"], env["DATABASE_URL"]); url != "" {
+		p.Kind, p.URL = "url", url
+		return p
+	}
+	switch p.Connection {
+	case "":
+		for _, key := range []string{"DB_DATABASE", "DB_HOST", "DB_PORT", "DB_USERNAME"} {
+			if env[key] != "" {
+				p.Kind, p.Problem = "unknown", "DB_CONNECTION is not set in .env"
+				return p
+			}
+		}
+		file := filepath.Join(dir, "database", "database.sqlite")
+		if _, err := os.Stat(file); err != nil {
+			p.Kind = "none"
+			return p
+		}
+		p.Connection, p.Kind, p.File = "sqlite", "sqlite", file
+	case "sqlite":
+		switch {
+		case p.Name == ":memory:":
+			p.Kind = "none"
+		case p.Name == "":
+			p.Kind, p.File = "sqlite", filepath.Join(dir, "database", "database.sqlite")
+		case filepath.IsAbs(p.Name):
+			p.Kind, p.File = "sqlite", filepath.Clean(p.Name)
+		default:
+			p.Kind, p.File = "sqlite", filepath.Join(dir, p.Name)
+		}
+	case "mysql", "mariadb", "pgsql":
+		p.Kind = "server"
+	default:
+		p.Kind, p.Problem = "unknown", "DB_CONNECTION="+p.Connection+" is not supported"
+	}
+	return p
+}
+
+// SameServer reports whether both use the same database server.
+func (p ProjectDatabase) SameServer(o ProjectDatabase) bool {
+	return p.Kind == "server" && o.Kind == "server" && p.Engine() == o.Engine() && p.Host == o.Host && p.Port == o.Port
+}
+
+// Same reports whether both checkouts use the same database.
+func (p ProjectDatabase) Same(o ProjectDatabase) bool {
+	switch {
+	case p.Kind == "url" && o.Kind == "url":
+		return p.URL == o.URL
+	case p.Kind == "sqlite" && o.Kind == "sqlite":
+		return p.File == o.File
+	default:
+		return p.SameServer(o) && p.Name == o.Name
+	}
+}
+
+// Label names the database for people: a database name, file, or URL.
+func (p ProjectDatabase) Label() string {
+	switch p.Kind {
+	case "server":
+		return p.Name
+	case "sqlite":
+		return p.File
+	case "url":
+		return "DB_URL"
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

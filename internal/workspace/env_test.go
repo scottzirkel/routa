@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -95,5 +96,61 @@ func TestQuotedIdentifiers(t *testing.T) {
 	}
 	if got := postgresIdent(`we"ird`); got != `"we""ird"` {
 		t.Fatalf("postgresIdent = %s", got)
+	}
+}
+
+func TestProjectDatabaseFor(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		env  map[string]string
+		kind string
+		file string
+	}{
+		{"server", map[string]string{"DB_CONNECTION": "mysql", "DB_DATABASE": "shop"}, "server", ""},
+		{"url wins", map[string]string{"DB_CONNECTION": "mysql", "DB_URL": "mysql://u@h/shop"}, "url", ""},
+		{"sqlite default file", map[string]string{"DB_CONNECTION": "sqlite"}, "sqlite", dir + "/database/database.sqlite"},
+		{"sqlite relative", map[string]string{"DB_CONNECTION": "sqlite", "DB_DATABASE": "data/app.db"}, "sqlite", dir + "/data/app.db"},
+		{"sqlite absolute", map[string]string{"DB_CONNECTION": "sqlite", "DB_DATABASE": "/srv/app.db"}, "sqlite", "/srv/app.db"},
+		{"sqlite in memory", map[string]string{"DB_CONNECTION": "sqlite", "DB_DATABASE": ":memory:"}, "none", ""},
+		{"no settings", map[string]string{"APP_NAME": "shop"}, "none", ""},
+		{"settings without connection", map[string]string{"DB_DATABASE": "shop"}, "unknown", ""},
+		{"unsupported", map[string]string{"DB_CONNECTION": "sqlsrv"}, "unknown", ""},
+	}
+	for _, c := range cases {
+		p := ProjectDatabaseFor(dir, c.env)
+		if p.Kind != c.kind || p.File != c.file {
+			t.Errorf("%s: kind=%q file=%q, want %q %q", c.name, p.Kind, p.File, c.kind, c.file)
+		}
+	}
+}
+
+func TestProjectDatabaseForUsesLaravelDefaultSQLiteFile(t *testing.T) {
+	dir := t.TempDir()
+	file := dir + "/database/database.sqlite"
+	if err := os.MkdirAll(dir+"/database", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if p := ProjectDatabaseFor(dir, map[string]string{"APP_NAME": "shop"}); p.Kind != "sqlite" || p.File != file {
+		t.Fatalf("database = %#v", p)
+	}
+}
+
+func TestProjectDatabaseSame(t *testing.T) {
+	main := ProjectDatabaseFor("/code/shop", map[string]string{"DB_CONNECTION": "mysql", "DB_PORT": "3310", "DB_DATABASE": "shop"})
+	same := ProjectDatabaseFor("/code/shop-1", map[string]string{"DB_CONNECTION": "mysql", "DB_HOST": "localhost", "DB_PORT": "3310", "DB_DATABASE": "shop"})
+	own := ProjectDatabaseFor("/code/shop-1", map[string]string{"DB_CONNECTION": "mysql", "DB_PORT": "3310", "DB_DATABASE": "shop_1"})
+	otherServer := ProjectDatabaseFor("/code/shop-1", map[string]string{"DB_CONNECTION": "mysql", "DB_PORT": "3311", "DB_DATABASE": "shop"})
+	if !main.Same(same) || main.Same(own) || main.Same(otherServer) || !main.SameServer(own) {
+		t.Fatal("server comparison is wrong")
+	}
+	sqliteMain := ProjectDatabaseFor("/code/shop", map[string]string{"DB_CONNECTION": "sqlite"})
+	sqliteCopy := ProjectDatabaseFor("/code/shop-1", map[string]string{"DB_CONNECTION": "sqlite"})
+	sqliteShared := ProjectDatabaseFor("/code/shop-1", map[string]string{"DB_CONNECTION": "sqlite", "DB_DATABASE": "/code/shop/database/database.sqlite"})
+	if sqliteMain.Same(sqliteCopy) || !sqliteMain.Same(sqliteShared) {
+		t.Fatal("sqlite comparison is wrong")
 	}
 }

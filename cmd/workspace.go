@@ -45,10 +45,14 @@ var workspaceAddCmd = &cobra.Command{
 	Short: "Create a worktree of the current site with its own .test domain",
 	Long: `Creates a worktree beside the current site's repository and serves it.
 
-The database is shared with the parent by default. --database clone copies the
-parent's MySQL, MariaDB, Postgres, or SQLite database into a new one named
-<database>_<name>. --database empty creates that database empty and runs
-'php artisan migrate' when the app has artisan.`,
+Every workspace gets its own database, read from the parent's .env; it never
+shares the parent's, so migrations and seeders in a workspace cannot touch the
+parent's data. By default (--database clone) routa copies the parent's MySQL,
+MariaDB, Postgres, or SQLite database into a new one named <database>_<name>.
+--database empty creates that database empty and runs 'php artisan migrate'
+when the app has artisan. When routa cannot give the workspace its own
+database, for example because .env uses DB_URL, it refuses before creating
+anything.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runWorkspaceAdd,
 }
@@ -69,8 +73,9 @@ var workspaceRmCmd = &cobra.Command{
 with changes or untracked files unless --force is passed; ignored files such
 as vendor/ do not count. The branch is kept.
 
---drop-database also drops the workspace's database, but only when its .env
-names a different database than the parent's.`,
+The workspace's database is kept unless --drop-database is passed. routa only
+ever drops a database on the parent's server that differs from the parent's
+own; a SQLite file goes with the worktree.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runWorkspaceRm,
 }
@@ -78,7 +83,7 @@ names a different database than the parent's.`,
 func init() {
 	workspaceAddCmd.Flags().StringVar(&workspaceBranch, "branch", "", "branch to create or check out (default: the workspace name)")
 	workspaceAddCmd.Flags().StringVar(&workspaceFrom, "from", "", "commit or branch the new branch starts from (default: HEAD)")
-	workspaceAddCmd.Flags().StringVar(&workspaceDatabase, "database", "share", "share, clone, or empty")
+	workspaceAddCmd.Flags().StringVar(&workspaceDatabase, "database", "clone", "clone or empty")
 	workspaceListCmd.Flags().BoolVar(&workspaceListJSON, "json", false, "emit machine-readable JSON")
 	workspaceRmCmd.Flags().BoolVar(&workspaceForce, "force", false, "remove even with uncommitted changes or untracked files")
 	workspaceRmCmd.Flags().BoolVar(&workspaceDropDB, "drop-database", false, "drop the workspace's own database")
@@ -110,8 +115,8 @@ func workspaceRepo() (main, parent string, st *site.State, err error) {
 
 func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 	mode := workspaceDatabase
-	if mode != "share" && mode != "clone" && mode != "empty" {
-		return fmt.Errorf("--database must be share, clone, or empty")
+	if mode != "clone" && mode != "empty" {
+		return fmt.Errorf("--database must be clone or empty; workspaces never share the parent's database")
 	}
 	main, parent, st, err := workspaceRepo()
 	if err != nil {
@@ -201,40 +206,37 @@ type workspaceDB struct {
 	summary string
 }
 
+// planWorkspaceDatabase gives the workspace its own database. Workspaces
+// never share the parent's: a migration or seeder run in one would change the
+// parent's data. When routa cannot give the workspace its own database it
+// refuses, before creating anything.
 func planWorkspaceDatabase(main, wtPath, suffix, mode, envContent string) (workspaceDB, error) {
 	plan := workspaceDB{envSet: map[string]string{}, apply: func() error { return nil }}
-	env := workspace.ParseEnv(envContent)
-	db := workspace.DatabaseFromEnv(env)
+	db := workspace.ProjectDatabaseFor(main, workspace.ParseEnv(envContent))
 	hasArtisan := fileExists(filepath.Join(main, "artisan"))
+	refuse := func(reason string) error {
+		return fmt.Errorf("%s, so routa cannot give the workspace its own database (workspaces never share the parent's)", reason)
+	}
 
-	switch db.Engine() {
+	switch db.Kind {
+	case "none":
+		return plan, nil
+	case "url":
+		return plan, refuse("DB_URL is set in " + main + "/.env")
+	case "unknown":
+		return plan, refuse(db.Problem)
 	case "sqlite":
-		return planSQLiteWorkspace(plan, main, wtPath, mode, db, hasArtisan)
-	case "mysql", "mariadb", "postgres":
-	default:
-		if mode != "share" {
-			if envContent == "" {
-				return plan, fmt.Errorf("--database %s needs a .env with DB_CONNECTION in %s", mode, main)
-			}
-			return plan, fmt.Errorf("--database %s does not support DB_CONNECTION=%q", mode, db.Connection)
-		}
-		return plan, nil
+		return planSQLiteWorkspace(plan, main, wtPath, mode, db.File, hasArtisan)
 	}
 
-	if mode == "share" {
-		if db.Name != "" {
-			plan.summary = db.Name + " (shared with the parent)"
-		}
-		return plan, nil
-	}
 	if db.Name == "" {
-		return plan, fmt.Errorf("--database %s needs DB_DATABASE in %s/.env", mode, main)
+		return plan, refuse("DB_DATABASE is not set in " + main + "/.env")
 	}
 	name, err := workspace.CopyName(db.Name, suffix)
 	if err != nil {
 		return plan, err
 	}
-	tools, err := databaseToolsFor(db)
+	tools, err := databaseToolsFor(db.Database)
 	if err != nil {
 		return plan, err
 	}
@@ -243,7 +245,7 @@ func planWorkspaceDatabase(main, wtPath, suffix, mode, envContent string) (works
 		plan.summary = fmt.Sprintf("%s (cloned from %s)", name, db.Name)
 		plan.apply = func() error {
 			fmt.Printf("→ cloning database %s into %s\n", db.Name, name)
-			return workspace.CloneDatabase(db, tools, name)
+			return workspace.CloneDatabase(db.Database, tools, name)
 		}
 		return plan, nil
 	}
@@ -251,61 +253,55 @@ func planWorkspaceDatabase(main, wtPath, suffix, mode, envContent string) (works
 	plan.migrate = hasArtisan
 	plan.apply = func() error {
 		fmt.Printf("→ creating empty database %s\n", name)
-		return workspace.CreateDatabase(db, tools, name)
+		return workspace.CreateDatabase(db.Database, tools, name)
 	}
 	return plan, nil
 }
 
-func planSQLiteWorkspace(plan workspaceDB, main, wtPath, mode string, db workspace.Database, hasArtisan bool) (workspaceDB, error) {
-	parentFile := db.Name
-	if parentFile == "" {
-		parentFile = filepath.Join(main, "database", "database.sqlite")
-	} else if !filepath.IsAbs(parentFile) {
-		parentFile = filepath.Join(main, parentFile)
-	}
-	rel, err := filepath.Rel(main, parentFile)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		if mode != "share" {
-			return plan, fmt.Errorf("--database %s only supports SQLite files inside the project; %s is outside it", mode, parentFile)
+// planSQLiteWorkspace gives the workspace its own copy of a SQLite file at the
+// same place inside the worktree. A file outside the project goes to the
+// worktree's database/ directory, with DB_DATABASE pointing at it.
+func planSQLiteWorkspace(plan workspaceDB, main, wtPath, mode, parentFile string, hasArtisan bool) (workspaceDB, error) {
+	var wtFile string
+	if rel, err := filepath.Rel(main, parentFile); err == nil && !strings.HasPrefix(rel, "..") {
+		for _, ext := range []string{"", "-wal", "-shm", "-journal"} {
+			plan.skip = append(plan.skip, rel+ext)
 		}
-		plan.summary = parentFile + " (shared with the parent)"
-		return plan, nil
+		wtFile = filepath.Join(wtPath, rel)
+	} else {
+		wtFile = filepath.Join(wtPath, "database", filepath.Base(parentFile))
 	}
-	for _, ext := range []string{"", "-wal", "-shm", "-journal"} {
-		plan.skip = append(plan.skip, rel+ext)
+	// Keep a relative or default DB_DATABASE as it is: it already resolves
+	// inside the worktree. Point an absolute one at the worktree's copy.
+	if env := workspace.ParseEnv(readFileOrEmpty(filepath.Join(main, ".env"))); filepath.IsAbs(env["DB_DATABASE"]) {
+		plan.envSet["DB_DATABASE"] = wtFile
 	}
-	wtFile := filepath.Join(wtPath, rel)
 
-	switch mode {
-	case "share":
-		plan.envSet["DB_DATABASE"] = parentFile
-		plan.summary = parentFile + " (shared with the parent)"
-	case "clone":
-		if filepath.IsAbs(db.Name) {
-			plan.envSet["DB_DATABASE"] = wtFile
-		}
+	if mode == "clone" {
 		plan.summary = wtFile + " (cloned)"
 		plan.apply = func() error {
 			if !fileExists(parentFile) {
 				return fmt.Errorf("SQLite database %s does not exist", parentFile)
 			}
-			fmt.Printf("→ cloning %s\n", rel)
+			fmt.Printf("→ cloning %s\n", parentFile)
 			return workspace.CopyFile(parentFile, wtFile)
 		}
-	case "empty":
-		if filepath.IsAbs(db.Name) {
-			plan.envSet["DB_DATABASE"] = wtFile
+		return plan, nil
+	}
+	plan.summary = wtFile + " (empty)"
+	plan.migrate = hasArtisan
+	plan.apply = func() error {
+		if err := os.MkdirAll(filepath.Dir(wtFile), 0o755); err != nil {
+			return err
 		}
-		plan.summary = wtFile + " (empty)"
-		plan.migrate = hasArtisan
-		plan.apply = func() error {
-			if err := os.MkdirAll(filepath.Dir(wtFile), 0o755); err != nil {
-				return err
-			}
-			return os.WriteFile(wtFile, nil, 0o644)
-		}
+		return os.WriteFile(wtFile, nil, 0o644)
 	}
 	return plan, nil
+}
+
+func readFileOrEmpty(path string) string {
+	data, _ := os.ReadFile(path)
+	return string(data)
 }
 
 // databaseToolsFor picks client tools that match the server: when the port
@@ -380,10 +376,22 @@ func runRoutaIn(dir string, args ...string) error {
 }
 
 type workspaceListEntry struct {
-	Name   string `json:"name"`
-	Branch string `json:"branch"`
-	Path   string `json:"path"`
-	URL    string `json:"url,omitempty"`
+	Name                 string `json:"name"`
+	Branch               string `json:"branch"`
+	Path                 string `json:"path"`
+	URL                  string `json:"url,omitempty"`
+	Database             string `json:"database,omitempty"`
+	SharesParentDatabase bool   `json:"shares_parent_database"`
+}
+
+// checkoutDatabase reads the database a checkout's .env points at. A checkout
+// without a .env has no database of its own to compare.
+func checkoutDatabase(dir string) (workspace.ProjectDatabase, bool) {
+	data, err := os.ReadFile(filepath.Join(dir, ".env"))
+	if err != nil {
+		return workspace.ProjectDatabase{}, false
+	}
+	return workspace.ProjectDatabaseFor(dir, workspace.ParseEnv(string(data))), true
 }
 
 func runWorkspaceList(cmd *cobra.Command, _ []string) error {
@@ -395,11 +403,16 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	parentDB, hasParentDB := checkoutDatabase(main)
 	entries := []workspaceListEntry{}
 	for _, wt := range wts {
 		e := workspaceListEntry{Name: site.WorktreeSuffix(main, wt.Path), Branch: wt.Branch, Path: wt.Path}
 		if sites := sitesAtPath(st, wt.Path); len(sites) > 0 {
 			e.URL = resolvedSiteURL(sites[0])
+		}
+		if own, ok := checkoutDatabase(wt.Path); ok {
+			e.Database = own.Label()
+			e.SharesParentDatabase = hasParentDB && own.Same(parentDB)
 		}
 		entries = append(entries, e)
 	}
@@ -411,18 +424,38 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tBRANCH\tURL\tPATH")
+	fmt.Fprintln(w, "NAME\tBRANCH\tURL\tDATABASE\tPATH")
+	var sharing []string
 	for _, e := range entries {
-		branch, url := e.Branch, e.URL
+		branch, url, database := e.Branch, e.URL, e.Database
 		if branch == "" {
 			branch = "(detached)"
 		}
 		if url == "" {
 			url = "- (run routa reload)"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Name, branch, url, e.Path)
+		if database == "" {
+			database = "-"
+		}
+		if e.SharesParentDatabase {
+			database += " (SHARED)"
+			sharing = append(sharing, e.Name)
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.Name, branch, url, database, e.Path)
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	for i, name := range sharing {
+		if i == 0 {
+			fmt.Fprintln(cmd.OutOrStderr())
+		}
+		fmt.Fprintf(cmd.OutOrStderr(), "! %s shares the parent's database, so migrations and seeders run there change the parent's data.\n", name)
+	}
+	if len(sharing) > 0 {
+		fmt.Fprintln(cmd.OutOrStderr(), "  Give it its own DB_DATABASE, or recreate it with 'routa workspace add'.")
+	}
+	return nil
 }
 
 func runWorkspaceRm(_ *cobra.Command, args []string) error {
@@ -451,28 +484,25 @@ func runWorkspaceRm(_ *cobra.Command, args []string) error {
 	}
 
 	// Read the workspace's database before git deletes its .env.
-	var dropName string
-	var dropVia workspace.Database
-	if workspaceDropDB {
-		dropName, dropVia, err = workspaceOwnDatabase(main, target.Path)
-		if err != nil {
-			return err
-		}
-	}
+	drop := workspaceServerDatabase(main, target.Path)
 
 	if err := workspace.RemoveWorktree(main, target.Path, workspaceForce); err != nil {
 		return err
 	}
 	fmt.Printf("→ removed worktree %s\n", target.Path)
-	if dropName != "" {
-		tools, err := databaseToolsFor(dropVia)
+	switch {
+	case drop.name == "":
+	case !workspaceDropDB:
+		fmt.Printf("→ kept database %s; pass --drop-database to drop it with the workspace\n", drop.name)
+	default:
+		tools, err := databaseToolsFor(drop.via)
 		if err != nil {
 			return err
 		}
-		if err := workspace.DropDatabase(dropVia, tools, dropName); err != nil {
+		if err := workspace.DropDatabase(drop.via, tools, drop.name); err != nil {
 			return err
 		}
-		fmt.Printf("→ dropped database %s\n", dropName)
+		fmt.Printf("→ dropped database %s\n", drop.name)
 	}
 	if err := commitAndReload(st, fmt.Sprintf("stopped serving workspace %s", want)); err != nil {
 		return err
@@ -483,26 +513,21 @@ func runWorkspaceRm(_ *cobra.Command, args []string) error {
 	return nil
 }
 
-// workspaceOwnDatabase returns the database a workspace's .env names when
-// it differs from the parent's on the same server, and the parent connection
-// to drop it through. A shared or SQLite database returns an empty name.
-func workspaceOwnDatabase(main, wtPath string) (string, workspace.Database, error) {
-	wtEnv, err := os.ReadFile(filepath.Join(wtPath, ".env"))
-	if err != nil {
-		return "", workspace.Database{}, fmt.Errorf("--drop-database: read %s/.env: %w", wtPath, err)
+type serverDatabase struct {
+	name string
+	via  workspace.Database // connection to drop it through
+}
+
+// workspaceServerDatabase returns the workspace's own database on the
+// parent's server, if it has one. The parent's database is never returned,
+// so dropping can never touch it. A SQLite file goes with the worktree.
+func workspaceServerDatabase(main, wtPath string) serverDatabase {
+	own, ok := checkoutDatabase(wtPath)
+	parent, hasParent := checkoutDatabase(main)
+	if !ok || !hasParent || own.Kind != "server" || own.Name == "" || !own.SameServer(parent) || own.Same(parent) {
+		return serverDatabase{}
 	}
-	parentEnv, _ := os.ReadFile(filepath.Join(main, ".env"))
-	own := workspace.DatabaseFromEnv(workspace.ParseEnv(string(wtEnv)))
-	parent := workspace.DatabaseFromEnv(workspace.ParseEnv(string(parentEnv)))
-	switch own.Engine() {
-	case "mysql", "mariadb", "postgres":
-	default:
-		fmt.Println("→ no server database to drop")
-		return "", own, nil
-	}
-	if own.Name == "" || own.Name == parent.Name || own.Host != parent.Host || own.Port != parent.Port {
-		fmt.Printf("→ database %s is shared with the parent; not dropping it\n", own.Name)
-		return "", own, nil
-	}
-	return own.Name, parent, nil
+	// Connect through the parent's database: Postgres cannot drop the
+	// database a session is connected to.
+	return serverDatabase{name: own.Name, via: parent.Database}
 }

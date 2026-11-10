@@ -12,8 +12,10 @@ Herd 2 parity work (Herd 2.0 shipped in October 2026 for macOS and Windows).
   docroot, PHP version, and HTTPS setting. It copies the parent's ignored
   working files (`.env`, `vendor/`, `node_modules/`, build output) with
   copy-on-write where the filesystem supports it, renames the site's hosts in
-  the new `.env`, and can share, clone, or empty the MySQL, MariaDB,
-  Postgres, or SQLite database. `routa workspace list` and `rm` round it out.
+  the new `.env`, and gives the workspace its own MySQL, MariaDB, Postgres,
+  or SQLite database, cloned by default or empty. Workspaces never share the
+  parent's database; `add` refuses when it cannot isolate one, and
+  `routa workspace list` flags worktrees that do. `rm` rounds it out.
 - **Git worktree subdomains** — worktrees routa did not create, such as the
   ones coding agents keep inside a repository, are served at
   `<site>-<folder>.test`. Worktrees a tracked directory already serves keep

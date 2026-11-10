@@ -498,9 +498,9 @@ several branches, or several coding agents, can run the same app side by side.
 
 ```bash
 cd ~/code/shop
-routa workspace add 5194                    # ~/code/shop-5194 on branch 5194
+routa workspace add 5194                    # ~/code/shop-5194 with its own copy of the database
 routa workspace add login --branch fix/login --from origin/main
-routa workspace add 5194 --database clone   # copy the database too
+routa workspace add 5195 --database empty   # fresh database, migrated
 routa workspace list
 routa workspace rm 5194 --drop-database
 ```
@@ -519,19 +519,28 @@ setting. Wildcard hosts cover the app's subdomains, such as
 - Renames the site's hosts in the new `.env`, so `APP_URL=https://shop.test`,
   `SESSION_DOMAIN=.shop.test`, and `API_URL=https://api.shop.test` all move to
   `shop-5194`. Other hosts are left alone.
-- Handles the database with `--database`:
-  - `share` (the default) keeps using the parent's database.
-  - `clone` copies the parent's MySQL, MariaDB, Postgres, or SQLite database
-    into a new one named `<database>_<name>`, such as `shop_5194`.
+- Gives the workspace its own database, read from the parent's `.env`, with
+  `--database`:
+  - `clone` (the default) copies the parent's MySQL, MariaDB, Postgres, or
+    SQLite database into a new one named `<database>_<name>`, such as
+    `shop_5194`. A SQLite file is copied to the same place in the worktree.
   - `empty` creates that database empty and runs `php artisan migrate`.
+
+Workspaces never share the parent's database, so a migration, `migrate:fresh`,
+or seeder run in a workspace cannot change the parent's data. When routa
+cannot give a workspace its own database, for example because `.env` uses
+`DB_URL` or a `DB_CONNECTION` routa does not support, `add` refuses before
+creating anything. `routa workspace list` marks any worktree whose `.env`
+still points at the parent's database, such as one an agent created by hand.
 
 Cloning uses the credentials in the parent's `.env`. For a routa-managed
 server, routa prefers the dump tool shipped with that version.
 
 `rm` removes the worktree and stops serving it. git refuses when the worktree
 has changes or untracked files unless you pass `--force`; ignored files such as
-`vendor/` do not count. The branch is kept. `--drop-database` also drops the
-workspace's database, but only when it differs from the parent's.
+`vendor/` do not count. The branch is kept. The workspace's database is kept
+too unless you pass `--drop-database`; routa never drops the parent's. A
+SQLite file goes with the worktree.
 
 routa also serves git worktrees it did not create, such as the ones coding
 agents make inside a repository. A worktree at
