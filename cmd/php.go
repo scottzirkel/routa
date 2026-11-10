@@ -843,7 +843,6 @@ type phpCLIContext struct {
 	INIDir    string
 	ShimDir   string
 	SiteNames []string
-	ExtraEnv  []string // KEY=value pairs added for this run only
 }
 
 func currentPHPContext() (*phpCLIContext, error) {
@@ -913,9 +912,6 @@ func runPHPProxy(_ *cobra.Command, args []string) error {
 		return err
 	}
 	args = trimArgSeparator(args)
-	if isTestRun(args) {
-		ctx.ExtraEnv = worktreeTestEnv()
-	}
 	return runWithRoutaPHP(ctx, ctx.Bin, args)
 }
 
@@ -929,9 +925,6 @@ func runComposerProxy(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("composer not found in PATH")
 	}
 	args = trimArgSeparator(args)
-	if composerRunsTests(args) {
-		ctx.ExtraEnv = worktreeTestEnv()
-	}
 	return runWithRoutaPHP(ctx, composer, args)
 }
 
@@ -1005,7 +998,7 @@ func envWithRoutaPHP(ctx *phpCLIContext) []string {
 	if !phprcSet {
 		env = append(env, "PHPRC="+ctx.INIDir)
 	}
-	return append(env, ctx.ExtraEnv...)
+	return env
 }
 
 var phpRmCmd = &cobra.Command{

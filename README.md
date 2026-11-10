@@ -536,20 +536,6 @@ still points at the parent's database, such as one an agent created by hand.
 Cloning uses the credentials in the parent's `.env`. For a routa-managed
 server, routa prefers the dump tool shipped with that version.
 
-Test databases are not cloned, since tests create them on the fly and throw
-them away. They only need the worktree's name in them, so two checkouts never
-run tests against the same database. When `routa php` or `routa composer`
-starts a test run inside a linked worktree (`artisan test`, `pest`,
-`phpunit`, `paratest`, or `composer test`), it sets each database variable
-from `phpunit.xml` and `.env.testing` with the worktree's suffix, such as
-`DB_DATABASE=testing_5194`. PHPUnit and Laravel never overwrite a variable
-that is already set, so no tracked file changes, and Laravel's parallel test
-databases become `testing_5194_test_1`. This applies to every linked
-worktree, including ones agents create, and reaches editors and
-`vendor/bin/pest` through the [php shim](#making-scripts-and-editors-use-routas-php).
-A `force="true"` variable in `phpunit.xml` cannot be overridden; routa warns
-about it.
-
 `rm` removes the worktree and stops serving it. git refuses when the worktree
 has changes or untracked files unless you pass `--force`; ignored files such as
 `vendor/` do not count. The branch is kept. The workspace's database is kept

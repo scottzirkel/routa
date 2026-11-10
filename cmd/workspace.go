@@ -5,8 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
-	"sort"
 	"strings"
 	"text/tabwriter"
 
@@ -195,16 +193,6 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 	fmt.Fprintf(w, "  url\thttps://%s.test\n", newSite)
 	if db.summary != "" {
 		fmt.Fprintf(w, "  database\t%s\n", db.summary)
-	}
-	if tests, ok := workspace.TestDatabasesFor(wtPath); ok {
-		names := make([]string, 0, len(tests.Env))
-		for _, name := range tests.Env {
-			if !slices.Contains(names, name) {
-				names = append(names, name)
-			}
-		}
-		sort.Strings(names)
-		fmt.Fprintf(w, "  tests\t%s (routa php names them for test runs here)\n", strings.Join(names, ", "))
 	}
 	return w.Flush()
 }

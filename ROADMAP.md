@@ -16,10 +16,6 @@ Herd 2 parity work (Herd 2.0 shipped in October 2026 for macOS and Windows).
   or SQLite database, cloned by default or empty. Workspaces never share the
   parent's database; `add` refuses when it cannot isolate one, and
   `routa workspace list` flags worktrees that do. `rm` rounds it out.
-- **Per-worktree test databases** — test runs started through `routa php`
-  or `routa composer` inside a linked worktree get the test database names
-  from `phpunit.xml` and `.env.testing` with the worktree's suffix, such as
-  `testing_5194`, without changing any tracked file.
 - **Git worktree subdomains** — worktrees routa did not create, such as the
   ones coding agents keep inside a repository, are served at
   `<site>-<folder>.test`. Worktrees a tracked directory already serves keep
