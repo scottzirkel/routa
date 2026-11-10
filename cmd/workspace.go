@@ -26,6 +26,7 @@ var (
 	workspaceDropDB   bool
 	workspaceDryRun   bool
 	workspaceSite     string
+	workspaceCopy     []string
 )
 
 var workspaceCmd = &cobra.Command{
@@ -114,6 +115,7 @@ func init() {
 	workspaceAddCmd.Flags().StringVar(&workspaceBranch, "branch", "", "branch to create or check out (default: the workspace name)")
 	workspaceAddCmd.Flags().StringVar(&workspaceFrom, "from", "", "commit or branch the new branch starts from (default: HEAD)")
 	workspaceAddCmd.Flags().StringVar(&workspaceDatabase, "database", "clone", "clone or empty")
+	workspaceAddCmd.Flags().StringSliceVar(&workspaceCopy, "copy", nil, "also copy this ignored path from the parent (repeatable)")
 	workspaceListCmd.Flags().BoolVar(&workspaceListJSON, "json", false, "emit machine-readable JSON")
 	workspaceRmCmd.Flags().BoolVar(&workspaceForce, "force", false, "remove even with uncommitted changes or untracked files")
 	workspaceRmCmd.Flags().BoolVar(&workspaceDropDB, "drop-database", false, "drop the workspace's own database")
@@ -202,7 +204,7 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return fail(err)
 	}
-	plan := workspace.CopyPlan(ignored, worktreesInside(main), db.skip)
+	plan := workspace.CopyPlan(ignored, worktreesInside(main), db.skip, workspaceCopy)
 	if err := workspace.CopyPaths(main, wtPath, plan, db.skip, os.Stdout); err != nil {
 		return fail(err)
 	}

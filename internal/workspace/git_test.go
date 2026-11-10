@@ -9,23 +9,42 @@ import (
 	"testing"
 )
 
-func TestCopyPlanSkipsCachesLogsHotFileAndWorktrees(t *testing.T) {
+func TestCopyPlanCopiesOnlyWhatAWorkingCopyNeeds(t *testing.T) {
 	ignored := []string{
 		".env",
+		".env.testing",
+		".env.bak",
 		"vendor/",
 		"node_modules/",
+		"nova-components/MerchantManager/node_modules/",
+		"nova-components/MerchantManager/vendor/",
 		"public/build/",
+		"public/vendor/nova/",
 		"public/hot",
 		"public/storage",
 		"bootstrap/cache/config.php",
 		"storage/framework/views/abc.php",
 		"storage/logs/laravel.log",
+		"storage/debugbar/",
+		"storage/app/fix-home-urls.json",
 		"storage/oauth-private.key",
+		".ai/AGENTS.local.md",
+		".ai/triage/",
+		"CLAUDE.local.md",
 		".claude/worktrees/",
+		".claude/scheduled_tasks.lock",
+		"notebooks/.venv/",
+		"docs/",
+		"config/ray.php",
 		"database/database.sqlite",
 	}
-	got := CopyPlan(ignored, []string{".claude/worktrees/login"}, []string{"database/database.sqlite"})
-	want := []string{".env", "vendor/", "node_modules/", "public/build/", "public/storage", "storage/oauth-private.key"}
+	got := CopyPlan(ignored, []string{".claude/worktrees/login"}, []string{"database/database.sqlite"}, []string{"config/ray.php"})
+	want := []string{
+		".env", ".env.testing", "vendor/", "node_modules/",
+		"nova-components/MerchantManager/node_modules/", "nova-components/MerchantManager/vendor/",
+		"public/build/", "public/vendor/nova/", "public/storage", "storage/oauth-private.key",
+		".ai/AGENTS.local.md", ".ai/triage/", "CLAUDE.local.md", "config/ray.php",
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("plan = %#v\nwant %#v", got, want)
 	}
@@ -89,10 +108,12 @@ func TestWorktreeRoundTrip(t *testing.T) {
 	write("data/app.sqlite", "db")
 	write("data/keep.txt", "keep")
 	write("bootstrap/cache/config.php", "<?php return ['path' => '"+main+"'];")
-	if err := os.Symlink(filepath.Join(main, "public"), filepath.Join(main, "public-link")); err != nil {
+	// php artisan storage:link makes this absolute link.
+	write("storage/app/public/.gitignore", "*\n!.gitignore\n")
+	if err := os.Symlink(filepath.Join(main, "storage", "app", "public"), filepath.Join(main, "public", "storage")); err != nil {
 		t.Fatal(err)
 	}
-	write(".gitignore", "/vendor\n.env\n/public/hot\n/bootstrap/cache/*.php\n/data\n/public-link\n")
+	write(".gitignore", "/vendor\n.env\n/public/hot\n/bootstrap/cache/*.php\n/data\n/public/storage\n")
 	gitIn(t, main, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "ignore link")
 
 	if got, err := MainRepo(filepath.Join(main, "public")); err != nil || got != main {
@@ -110,7 +131,7 @@ func TestWorktreeRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	skip := []string{"data/app.sqlite"}
-	if err := CopyPaths(main, wt, CopyPlan(ignored, nil, skip), skip, &strings.Builder{}); err != nil {
+	if err := CopyPaths(main, wt, CopyPlan(ignored, nil, skip, []string{"data/"}), skip, &strings.Builder{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, rel := range []string{".env", "vendor/autoload.php", "data/keep.txt"} {
@@ -123,8 +144,8 @@ func TestWorktreeRoundTrip(t *testing.T) {
 			t.Errorf("%s copied, want skipped", rel)
 		}
 	}
-	if target, err := os.Readlink(filepath.Join(wt, "public-link")); err != nil || target != filepath.Join(wt, "public") {
-		t.Errorf("public-link -> %q, %v; want it re-pointed into the worktree", target, err)
+	if target, err := os.Readlink(filepath.Join(wt, "public", "storage")); err != nil || target != filepath.Join(wt, "storage", "app", "public") {
+		t.Errorf("public/storage -> %q, %v; want it re-pointed into the worktree", target, err)
 	}
 
 	wts, err := ListWorktrees(main)

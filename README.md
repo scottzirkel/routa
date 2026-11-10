@@ -103,7 +103,7 @@ routa track / untrack / ignore / unignore / link / unlink / alias / unalias / is
 routa proxy <name> <port>       # reverse-proxy <name>.test → 127.0.0.1:<port>
 routa dev [name]                # run a detected dev server and proxy it
 routa workspace add <name>      # git worktree of this site at <site>-<name>.test
-routa workspace list [--json] / rm <name> / prune [--dry-run]
+routa workspace list [--json] / rm <name> / fix <name> / prune [--dry-run]
 routa redis start [--port 6380] / stop / restart / status
 routa mail start on 8026 --smtp-port 1026 / stop / restart / status / proxy
 routa db start mariadb 11.4 on 3307
@@ -503,6 +503,7 @@ routa workspace add login --branch fix/login --from origin/main
 routa workspace add 5195 --database empty   # fresh database, migrated
 routa workspace list
 routa workspace rm 5194 --drop-database
+routa workspace fix 4885 --dry-run          # what a hand-made worktree is missing
 routa workspace prune --dry-run             # test databases left by removed worktrees
 ```
 
@@ -515,12 +516,15 @@ folder. From anywhere else, name the site with `--site`, as in
 setting. Wildcard hosts cover the app's subdomains, such as
 `app.shop-5194.test`. routa then:
 
-- Copies the parent's ignored files that a working copy needs, such as `.env`,
-  `vendor/`, `node_modules/`, `public/build/`, and `storage/*.key`. It uses
-  copy-on-write (`cp --reflink=auto`), so on btrfs or XFS the copy takes no
-  extra disk until files change. Caches and logs (`bootstrap/cache`,
-  `storage/framework`, `storage/logs`), `public/hot`, and other worktrees are
-  left behind.
+- Copies the parent's ignored files that a working copy needs: `.env` and
+  `.env.testing`, dependencies (`vendor/` and `node_modules/` at any depth),
+  everything ignored under `public/` except `public/hot` (built and published
+  assets, and the `public/storage` link), keys in `storage/`, `auth.json`, and
+  local agent instructions (`.ai/`, `CLAUDE.local.md`, `AGENTS.local.md`).
+  Name anything else with `--copy <path>`. Caches, logs, backups, lock files,
+  local data, and other worktrees stay behind. The copy uses copy-on-write
+  (`cp --reflink=auto`), so on btrfs or XFS it takes no extra disk until files
+  change.
 - Renames the site's hosts in the new `.env`, so `APP_URL=https://shop.test`,
   `SESSION_DOMAIN=.shop.test`, and `API_URL=https://api.shop.test` all move to
   `shop-5194`. Other hosts are left alone.
@@ -602,6 +606,15 @@ system service or someone else. Workspaces never change data there:
 - `rm --drop-database` and test cleanup never drop anything there.
 - A Redis on its standard port gets no workspace numbers, since routa cannot
   see which databases other apps use; the workspace keeps the parent's.
+
+`routa workspace fix <name>` brings a worktree made by hand, or by an older
+routa, in line with what `add` sets up, changing only what is wrong. It
+replaces a `vendor` or `node_modules` link into another checkout with the
+worktree's own copy, copies missing working files, renames the parent's or
+another worktree's hosts in `.env`, gives the worktree its own dev database
+when it shares one or points at one that is gone, renames test databases it
+shares, and replaces Redis numbers another checkout uses. Test database names
+that are already the worktree's own are kept. Run it with `--dry-run` first.
 
 routa also serves git worktrees it did not create, such as the ones coding
 agents make inside a repository. A worktree at

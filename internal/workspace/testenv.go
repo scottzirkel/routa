@@ -224,3 +224,23 @@ func IsTestDatabaseKey(key string) bool { return testDatabaseKey.MatchString(key
 // PlainDatabaseName reports whether a value is a database name rather than
 // a SQLite path, :memory:, or a ${...} reference.
 func PlainDatabaseName(v string) bool { return plainDatabaseName(v) }
+
+// RedisKeys lists the Redis database keys a set of .env files uses: REDIS_DB
+// and REDIS_CACHE_DB, plus any other REDIS_*_DB they set, REDIS_DB first.
+func RedisKeys(envs ...map[string]string) []string { return redisKeys(envs...) }
+
+// FreeRedisDatabases picks n database numbers that are not in used.
+func FreeRedisDatabases(used map[int]bool, n, databases int) ([]int, error) {
+	return freeRedisDatabases(used, n, databases)
+}
+
+// EffectiveRedisDatabase is the number a key resolves to, counting Laravel's
+// defaults (REDIS_DB 0, REDIS_CACHE_DB 1) when the file leaves it out.
+func EffectiveRedisDatabase(env map[string]string, key string) (int, bool) {
+	v := env[key]
+	if v == "" {
+		v = map[string]string{"REDIS_DB": "0", "REDIS_CACHE_DB": "1"}[key]
+	}
+	n, err := strconv.Atoi(v)
+	return n, err == nil
+}

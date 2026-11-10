@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -22,18 +23,46 @@ var neverCopy = []string{
 }
 
 // CopyPlan picks which of the parent's ignored paths (from IgnoredPaths) to
-// copy into a new worktree: dependencies, .env files, build output, keys and
-// local data, but not caches, logs, other worktrees, or anything in skip.
-// Worktrees and skip are paths relative to the parent.
-func CopyPlan(ignored, worktrees, skip []string) []string {
+// copy into a new worktree. It copies only what a working copy needs: the
+// .env files, dependencies, built and published assets, keys, and local agent
+// instructions (see wantedInWorkspace), plus any path in extra. Caches, logs,
+// backups, lock files, local data, other worktrees, and anything in skip stay
+// behind. Worktrees, skip, and extra are paths relative to the parent.
+func CopyPlan(ignored, worktrees, skip, extra []string) []string {
 	var plan []string
 	for _, p := range ignored {
 		if matchesAny(p, neverCopy) || matchesAny(p, skip) || touchesWorktree(p, worktrees) {
 			continue
 		}
-		plan = append(plan, p)
+		if wantedInWorkspace(p) || matchesAny(p, extra) {
+			plan = append(plan, p)
+		}
 	}
 	return plan
+}
+
+// wantedInWorkspace reports whether an ignored path is something a working
+// copy of the app needs.
+func wantedInWorkspace(p string) bool {
+	clean := strings.TrimSuffix(p, "/")
+	base := path.Base(clean)
+	switch {
+	case clean == ".env" || clean == ".env.testing" || clean == "auth.json":
+		return true
+	case base == "vendor" || base == "node_modules" || strings.Contains(clean, "/node_modules/") || strings.HasPrefix(clean, "node_modules/"):
+		// Dependencies at any depth, such as a Nova component's.
+		return true
+	case strings.HasPrefix(clean, "public/"):
+		// Built and published assets, and the public/storage link.
+		return true
+	case path.Dir(clean) == "storage" && strings.HasSuffix(base, ".key"):
+		// Passport and other keys.
+		return true
+	case clean == ".ai" || strings.HasPrefix(clean, ".ai/") || clean == "CLAUDE.local.md" || clean == "AGENTS.local.md":
+		// Local agent instructions and the files they point to.
+		return true
+	}
+	return false
 }
 
 // matchesAny reports whether p is one of patterns or inside one. Patterns
