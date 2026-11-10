@@ -5,7 +5,37 @@ priority, not commitment.
 
 ## Pending release
 
-- None.
+Herd 2 parity work (Herd 2.0 shipped in October 2026 for macOS and Windows).
+
+- **Workspaces** — `routa workspace add <name>` creates a git worktree beside
+  the site's repository, served at `<site>-<name>.test` with the parent's
+  docroot, PHP version, and HTTPS setting. It copies the parent's ignored
+  working files (`.env`, `vendor/`, `node_modules/`, build output) with
+  copy-on-write where the filesystem supports it, renames the site's hosts in
+  the new `.env`, and can share, clone, or empty the MySQL, MariaDB,
+  Postgres, or SQLite database. `routa workspace list` and `rm` round it out.
+- **Git worktree subdomains** — worktrees routa did not create, such as the
+  ones coding agents keep inside a repository, are served at
+  `<site>-<folder>.test`. Worktrees a tracked directory already serves keep
+  their site.
+- **`routa dev` for PHP sites** — inside a PHP site, `routa dev` runs
+  `php artisan dev` (when the app has it) or the package.json dev script
+  beside PHP-FPM instead of replacing the site with a proxy to Vite. Proxied
+  dev servers now put the previous site config back when they stop, and
+  Ctrl+C interrupts the dev server instead of killing it, so Laravel's Vite
+  plugin cleans up `public/hot`.
+- **Safe PHP reinstalls** — PHP binaries and managed extensions download to a
+  temporary file and replace the installed one only when complete. A failed
+  or missing download no longer deletes a working `php-fpm` or extension, and
+  a failed install of a new version leaves no half-installed directory.
+- **More `--json` output** — `routa php list`, `db list`, `search list`,
+  `storage list`, `workspace list`, and `version` take `--json`, and service
+  listings include whether each unit is running.
+- **MySQL 8.0 client on current distros** — the `mysql` client in MySQL
+  8.0's generic archive is linked against ncurses 5, which current distros no
+  longer ship, so it could not start. `routa db install` and `db start` now
+  link the system's ncurses 6 into the archive's own `lib/private` directory
+  when the client fails, and remove the links again if that does not help.
 
 ## Released
 
@@ -261,6 +291,17 @@ trying to become a full-stack desktop dev suite.
   artifacts are attached.
 - **AUR package publication** — publish and maintain `routa-bin` after release
   artifacts exist, then keep package metadata aligned with the release process.
+
+### P1 — Herd 2 parity
+
+- **Request profiler** — Herd 2 made its PHP profiler free. Blocked for routa:
+  the static `php-fpm` builds cannot load shared extensions ("Dynamic loading
+  not supported"), so a profiler, and Xdebug for browser requests, first need
+  a dynamically linked `php-fpm`.
+- **Dev server on first request** — Herd starts a site's dev server when the
+  site is opened and holds the first request until Vite is ready. routa has
+  no long-lived daemon, so this would need systemd socket activation or
+  similar. Revisit if `routa dev` alone proves too manual.
 
 ### P2 — local workflow polish
 
