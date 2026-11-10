@@ -102,6 +102,8 @@ routa php shim install / uninstall / status
 routa track / untrack / ignore / unignore / link / unlink / alias / unalias / isolate / secure
 routa proxy <name> <port>       # reverse-proxy <name>.test → 127.0.0.1:<port>
 routa dev [name]                # run a detected dev server and proxy it
+routa workspace add <name>      # git worktree of this site at <site>-<name>.test
+routa workspace list [--json] / rm <name>
 routa redis start [--port 6380] / stop / restart / status
 routa mail start on 8026 --smtp-port 1026 / stop / restart / status / proxy
 routa db start mariadb 11.4 on 3307
@@ -116,7 +118,7 @@ routa version                   # print version, commit, build date
 
 Read-only listings take `--json` for scripts and coding agents: `routa status`,
 `routa doctor`, `routa php list`, `routa db list`, `routa search list`,
-`routa storage list`, and `routa version`. An empty
+`routa storage list`, `routa workspace list`, and `routa version`. An empty
 list prints `[]`. Saved database passwords are never included.
 
 `park` and `unpark` are aliases for `track` and `untrack` for Valet users.
@@ -488,6 +490,54 @@ version on `PATH`:
 Ctrl+C interrupts the dev server rather than killing it, so Laravel's Vite
 plugin can delete `public/hot` on the way out. A leftover hot file would point
 the site at a Vite server that is no longer running.
+
+## Workspaces
+
+A workspace is a git worktree of a site with its own `.test` domain, so
+several branches, or several coding agents, can run the same app side by side.
+
+```bash
+cd ~/code/shop
+routa workspace add 5194                    # ~/code/shop-5194 on branch 5194
+routa workspace add login --branch fix/login --from origin/main
+routa workspace add 5194 --database clone   # copy the database too
+routa workspace list
+routa workspace rm 5194 --drop-database
+```
+
+`add` creates the worktree beside the repository and serves it at
+`https://shop-5194.test`, with the parent's docroot, PHP version, and HTTPS
+setting. Wildcard hosts cover the app's subdomains, such as
+`app.shop-5194.test`. routa then:
+
+- Copies the parent's ignored files that a working copy needs, such as `.env`,
+  `vendor/`, `node_modules/`, `public/build/`, and `storage/*.key`. It uses
+  copy-on-write (`cp --reflink=auto`), so on btrfs or XFS the copy takes no
+  extra disk until files change. Caches and logs (`bootstrap/cache`,
+  `storage/framework`, `storage/logs`), `public/hot`, and other worktrees are
+  left behind.
+- Renames the site's hosts in the new `.env`, so `APP_URL=https://shop.test`,
+  `SESSION_DOMAIN=.shop.test`, and `API_URL=https://api.shop.test` all move to
+  `shop-5194`. Other hosts are left alone.
+- Handles the database with `--database`:
+  - `share` (the default) keeps using the parent's database.
+  - `clone` copies the parent's MySQL, MariaDB, Postgres, or SQLite database
+    into a new one named `<database>_<name>`, such as `shop_5194`.
+  - `empty` creates that database empty and runs `php artisan migrate`.
+
+Cloning uses the credentials in the parent's `.env`. For a routa-managed
+server, routa prefers the dump tool shipped with that version.
+
+`rm` removes the worktree and stops serving it. git refuses when the worktree
+has changes or untracked files unless you pass `--force`; ignored files such as
+`vendor/` do not count. The branch is kept. `--drop-database` also drops the
+workspace's database, but only when it differs from the parent's.
+
+routa also serves git worktrees it did not create, such as the ones coding
+agents make inside a repository. A worktree at
+`~/code/shop/.claude/worktrees/login` is served at `https://shop-login.test`
+after `routa reload`. Worktrees that a tracked directory already serves keep
+that site.
 
 ## Redis
 
