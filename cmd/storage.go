@@ -129,22 +129,34 @@ var storageListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if len(instances) == 0 {
-			fmt.Fprintln(cmd.OutOrStdout(), "no object storage services installed. `routa storage install minio <version>`")
-			return nil
-		}
-		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
-		fmt.Fprintln(w, "ENGINE\tVERSION\tAPI_PORT\tCONSOLE_PORT\tUNIT\tDATA_DIR")
+		entries := []serviceListEntry{}
 		for _, instance := range instances {
 			apiPort, consolePort, err := minIOConfiguredPorts(instance.Version)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(w, "minio\t%s\t%s\t%s\t%s\t%s\n", instance.Version, apiPort, consolePort, instance.Unit, instance.DataDir)
+			entries = append(entries, serviceListEntry{Engine: "minio", Version: instance.Version, Port: apiPort, ConsolePort: consolePort, Unit: instance.Unit, DataDir: instance.DataDir})
+		}
+		if storageListJSON {
+			for i := range entries {
+				entries[i].Active = systemd.IsActive(entries[i].Unit)
+			}
+			return writeJSON(cmd.OutOrStdout(), entries)
+		}
+		if len(entries) == 0 {
+			fmt.Fprintln(cmd.OutOrStdout(), "no object storage services installed. `routa storage install minio <version>`")
+			return nil
+		}
+		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
+		fmt.Fprintln(w, "ENGINE\tVERSION\tAPI_PORT\tCONSOLE_PORT\tUNIT\tDATA_DIR")
+		for _, e := range entries {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", e.Engine, e.Version, e.Port, e.ConsolePort, e.Unit, e.DataDir)
 		}
 		return w.Flush()
 	},
 }
+
+var storageListJSON bool
 
 func minIOProxyLink(args []string) (site.Link, error) {
 	version := args[1]
@@ -227,6 +239,7 @@ func minIOStatusHeader(unit, apiPort, consolePort string) string {
 }
 
 func init() {
+	storageListCmd.Flags().BoolVar(&storageListJSON, "json", false, "emit machine-readable JSON")
 	storageInstallCmd.Flags().StringVar(&storageInstallPort, "port", "", "MinIO API TCP port")
 	storageInstallCmd.Flags().StringVar(&storageInstallConsolePort, "console-port", "", "MinIO console TCP port")
 	storageStartCmd.Flags().StringVar(&storageStartPort, "port", "", "MinIO API TCP port")

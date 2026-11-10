@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -645,37 +646,50 @@ var phpListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if len(installed) == 0 {
-			fmt.Println("no PHP versions installed. `routa php install <version>`")
-			return nil
-		}
 		st, _ := site.Load()
 		links, _ := php.Symlinks()
 
-		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
-		fmt.Fprintln(w, "VERSION\tDEFAULT\tALIAS")
+		entries := []phpListEntry{}
 		for _, i := range installed {
-			var aliases []string
+			entry := phpListEntry{Version: i.Version, Aliases: []string{}}
 			for name, target := range links {
 				if target == i.Version {
-					aliases = append(aliases, name)
+					entry.Aliases = append(entry.Aliases, name)
 				}
 			}
-			mark := ""
+			sort.Strings(entry.Aliases)
 			if st != nil {
-				if st.DefaultPHP == i.Version {
-					mark = "*"
-				}
-				for _, a := range aliases {
-					if st.DefaultPHP == a {
-						mark = "*"
-					}
-				}
+				entry.Default = st.DefaultPHP == i.Version || slices.Contains(entry.Aliases, st.DefaultPHP)
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\n", i.Version, mark, strings.Join(aliases, ", "))
+			entries = append(entries, entry)
+		}
+		if phpListJSON {
+			return writeJSON(cmd.OutOrStdout(), entries)
+		}
+		if len(entries) == 0 {
+			fmt.Println("no PHP versions installed. `routa php install <version>`")
+			return nil
+		}
+
+		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
+		fmt.Fprintln(w, "VERSION\tDEFAULT\tALIAS")
+		for _, e := range entries {
+			mark := ""
+			if e.Default {
+				mark = "*"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\n", e.Version, mark, strings.Join(e.Aliases, ", "))
 		}
 		return w.Flush()
 	},
+}
+
+var phpListJSON bool
+
+type phpListEntry struct {
+	Version string   `json:"version"`
+	Default bool     `json:"default"`
+	Aliases []string `json:"aliases"`
 }
 
 var phpUseCmd = &cobra.Command{
@@ -1021,6 +1035,7 @@ var phpRmCmd = &cobra.Command{
 }
 
 func init() {
+	phpListCmd.Flags().BoolVar(&phpListJSON, "json", false, "emit machine-readable JSON")
 	phpExtCmd.AddCommand(phpExtListCmd)
 	phpXdebugCmd.AddCommand(phpXdebugInstallCmd, phpXdebugOnCmd, phpXdebugOffCmd, phpXdebugStatusCmd)
 	defaultXdebug := php.DefaultXdebugOptions()

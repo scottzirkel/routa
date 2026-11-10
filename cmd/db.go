@@ -180,35 +180,55 @@ var dbListCmd = &cobra.Command{
 	Short: "List routa database services",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		mariadbInstances, err := services.InstalledMariaDBInstances()
+		entries, err := databaseListEntries()
 		if err != nil {
 			return err
 		}
-		mysqlInstances, err := services.InstalledMySQLInstances()
-		if err != nil {
-			return err
+		if dbListJSON {
+			for i := range entries {
+				entries[i].Active = systemd.IsActive(entries[i].Unit)
+			}
+			return writeJSON(cmd.OutOrStdout(), entries)
 		}
-		postgresInstances, err := services.InstalledPostgresInstances()
-		if err != nil {
-			return err
-		}
-		if len(mariadbInstances) == 0 && len(mysqlInstances) == 0 && len(postgresInstances) == 0 {
+		if len(entries) == 0 {
 			fmt.Fprintln(cmd.OutOrStdout(), "no database services installed. `routa db install mariadb <version>`, `routa db install mysql <version>`, or `routa db install postgres <version>`")
 			return nil
 		}
 		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 4, ' ', 0)
 		fmt.Fprintln(w, "ENGINE\tVERSION\tINSTANCE\tPORT")
-		for _, instance := range mariadbInstances {
-			fmt.Fprintf(w, "mariadb\t%s\t%s\t%s\n", instance.Version, databaseInstanceName(instance.Instance), instance.Port)
-		}
-		for _, instance := range mysqlInstances {
-			fmt.Fprintf(w, "mysql\t%s\t%s\t%s\n", instance.Version, databaseInstanceName(instance.Instance), instance.Port)
-		}
-		for _, instance := range postgresInstances {
-			fmt.Fprintf(w, "postgres\t%s\t%s\t%s\n", instance.Version, databaseInstanceName(instance.Instance), instance.Port)
+		for _, e := range entries {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Engine, e.Version, databaseInstanceName(e.Instance), e.Port)
 		}
 		return w.Flush()
 	},
+}
+
+var dbListJSON bool
+
+func databaseListEntries() ([]serviceListEntry, error) {
+	entries := []serviceListEntry{}
+	mariadbInstances, err := services.InstalledMariaDBInstances()
+	if err != nil {
+		return nil, err
+	}
+	for _, i := range mariadbInstances {
+		entries = append(entries, serviceListEntry{Engine: "mariadb", Version: i.Version, Instance: i.Instance, Port: i.Port, Unit: i.Unit, DataDir: i.DataDir})
+	}
+	mysqlInstances, err := services.InstalledMySQLInstances()
+	if err != nil {
+		return nil, err
+	}
+	for _, i := range mysqlInstances {
+		entries = append(entries, serviceListEntry{Engine: "mysql", Version: i.Version, Instance: i.Instance, Port: i.Port, Unit: i.Unit, DataDir: i.DataDir})
+	}
+	postgresInstances, err := services.InstalledPostgresInstances()
+	if err != nil {
+		return nil, err
+	}
+	for _, i := range postgresInstances {
+		entries = append(entries, serviceListEntry{Engine: "postgres", Version: i.Version, Instance: i.Instance, Port: i.Port, Unit: i.Unit, DataDir: i.DataDir})
+	}
+	return entries, nil
 }
 
 var dbCredentialsCmd = &cobra.Command{
@@ -451,6 +471,7 @@ func databaseInstanceName(instance string) string {
 }
 
 func init() {
+	dbListCmd.Flags().BoolVar(&dbListJSON, "json", false, "emit machine-readable JSON")
 	dbInstallCmd.Flags().StringVar(&dbInstallPort, "port", "", "database TCP port")
 	dbInstallCmd.Flags().StringVar(&dbInstallUser, "user", "", "database application user")
 	dbInstallCmd.Flags().StringVar(&dbInstallPassword, "password", "", "database application password")

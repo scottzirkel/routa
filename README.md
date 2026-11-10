@@ -114,6 +114,11 @@ routa storage start minio RELEASE.2026-05-01T00-00-00Z on 9002 --console-port 90
 routa version                   # print version, commit, build date
 ```
 
+Read-only listings take `--json` for scripts and coding agents: `routa status`,
+`routa doctor`, `routa php list`, `routa db list`, `routa search list`,
+`routa storage list`, and `routa version`. An empty
+list prints `[]`. Saved database passwords are never included.
+
 `park` and `unpark` are aliases for `track` and `untrack` for Valet users.
 
 ## Health checks

@@ -121,36 +121,56 @@ var searchListCmd = &cobra.Command{
 	Short: "List routa search services",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		meiliInstances, err := services.InstalledMeilisearchInstances()
+		entries, err := searchListEntries()
 		if err != nil {
 			return err
 		}
-		typesenseInstances, err := services.InstalledTypesenseInstances()
-		if err != nil {
-			return err
+		if searchListJSON {
+			for i := range entries {
+				entries[i].Active = systemd.IsActive(entries[i].Unit)
+			}
+			return writeJSON(cmd.OutOrStdout(), entries)
 		}
-		if len(meiliInstances) == 0 && len(typesenseInstances) == 0 {
+		if len(entries) == 0 {
 			fmt.Fprintln(cmd.OutOrStdout(), "no search services installed. `routa search install meilisearch <version>` or `routa search install typesense <version>`")
 			return nil
 		}
 		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
 		fmt.Fprintln(w, "ENGINE\tVERSION\tPORT\tUNIT\tDATA_DIR")
-		for _, instance := range meiliInstances {
-			port, err := searchConfiguredPort("meilisearch", instance.Version)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(w, "meilisearch\t%s\t%s\t%s\t%s\n", instance.Version, port, instance.Unit, instance.DataDir)
-		}
-		for _, instance := range typesenseInstances {
-			port, err := searchConfiguredPort("typesense", instance.Version)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(w, "typesense\t%s\t%s\t%s\t%s\n", instance.Version, port, instance.Unit, instance.DataDir)
+		for _, e := range entries {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.Engine, e.Version, e.Port, e.Unit, e.DataDir)
 		}
 		return w.Flush()
 	},
+}
+
+var searchListJSON bool
+
+func searchListEntries() ([]serviceListEntry, error) {
+	entries := []serviceListEntry{}
+	meiliInstances, err := services.InstalledMeilisearchInstances()
+	if err != nil {
+		return nil, err
+	}
+	for _, i := range meiliInstances {
+		port, err := searchConfiguredPort("meilisearch", i.Version)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, serviceListEntry{Engine: "meilisearch", Version: i.Version, Port: port, Unit: i.Unit, DataDir: i.DataDir})
+	}
+	typesenseInstances, err := services.InstalledTypesenseInstances()
+	if err != nil {
+		return nil, err
+	}
+	for _, i := range typesenseInstances {
+		port, err := searchConfiguredPort("typesense", i.Version)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, serviceListEntry{Engine: "typesense", Version: i.Version, Port: port, Unit: i.Unit, DataDir: i.DataDir})
+	}
+	return entries, nil
 }
 
 func searchProxyLink(args []string) (site.Link, error) {
@@ -261,6 +281,7 @@ func searchStatusHeader(unit, port string) string {
 }
 
 func init() {
+	searchListCmd.Flags().BoolVar(&searchListJSON, "json", false, "emit machine-readable JSON")
 	searchInstallCmd.Flags().StringVar(&searchInstallPort, "port", "", "search service TCP port")
 	searchStartCmd.Flags().StringVar(&searchStartPort, "port", "", "search service TCP port")
 	searchCmd.AddCommand(searchInstallCmd, searchStartCmd, searchStopCmd, searchStatusCmd, searchProxyCmd, searchListCmd)
