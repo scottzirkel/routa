@@ -101,3 +101,21 @@ func TestEnsureWithBinaryWritesRedisFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestRedisConfigOffersDatabasesForWorkspaces(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	if got := RedisDatabaseCount("6380"); got != 16 {
+		t.Fatalf("without a routa config: %d databases, want Redis's default 16", got)
+	}
+	if err := WriteRedisConfigWithPort("6380"); err != nil {
+		t.Fatal(err)
+	}
+	if got := RedisDatabaseCount("6380"); got != RedisDatabases {
+		t.Fatalf("routa's Redis: %d databases, want %d", got, RedisDatabases)
+	}
+	if got := RedisDatabaseCount("6379"); got != 16 {
+		t.Fatalf("another server: %d databases, want 16", got)
+	}
+}

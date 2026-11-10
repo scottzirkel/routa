@@ -193,17 +193,24 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 	if sites := sitesAtPath(st, wtPath); len(sites) > 0 {
 		newSite = sites[0].Name
 	}
+	envPlan, err := planWorkspaceEnv(main, wtPath, suffix, string(envContent))
+	if err != nil {
+		return fail(err)
+	}
 	if len(envContent) > 0 {
-		rewritten := workspace.RewriteEnv(string(envContent), parent, newSite, db.envSet)
+		rewritten := workspace.RewriteEnv(string(envContent), parent, newSite, mergeEnv(db.envSet, envPlan.redis.App))
 		if err := os.WriteFile(filepath.Join(wtPath, ".env"), []byte(rewritten), 0o600); err != nil {
 			return fail(err)
 		}
 		fmt.Printf("→ wrote .env for %s.test\n", newSite)
 	}
-	tests, err := writeWorkspaceTestEnv(main, wtPath, suffix, string(envContent))
-	if err != nil {
-		return fail(err)
+	if set := mergeEnv(envPlan.tests.Set, envPlan.redis.Tests); len(set) > 0 {
+		if err := os.WriteFile(filepath.Join(wtPath, ".env.testing"), []byte(workspace.RewriteEnv(envPlan.testEnv, "", "", set)), 0o600); err != nil {
+			return fail(err)
+		}
+		fmt.Println("→ wrote .env.testing with the workspace's test databases")
 	}
+	tests, redis := envPlan.tests, envPlan.redis
 	if err := db.apply(); err != nil {
 		return fail(err)
 	}
@@ -228,28 +235,43 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 	if len(tests.Databases) > 0 {
 		fmt.Fprintf(w, "  tests\t%s\n", strings.Join(tests.Databases, ", "))
 	}
-	if len(tests.Redis) > 0 {
-		fmt.Fprintf(w, "  redis\t%s (tests)\n", strings.Join(tests.Redis, ", "))
+	if len(redis.App) > 0 {
+		fmt.Fprintf(w, "  redis\t%s\n", redis.Summary(redis.App))
+	}
+	if len(redis.Tests) > 0 {
+		fmt.Fprintf(w, "  test redis\t%s\n", redis.Summary(redis.Tests))
 	}
 	return w.Flush()
 }
 
-// writeWorkspaceTestEnv gives the workspace its own test databases and Redis
-// databases by editing its copy of .env.testing. A .env.testing that git
-// tracks is left alone, since the edit would show up as a change to commit.
-func writeWorkspaceTestEnv(main, wtPath, suffix, parentEnv string) (workspace.TestEnvPlan, error) {
-	path := filepath.Join(wtPath, ".env.testing")
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return workspace.TestEnvPlan{}, nil
+// workspaceEnv is what a new workspace changes in its .env and .env.testing.
+type workspaceEnv struct {
+	tests   workspace.TestEnvPlan
+	redis   workspace.RedisPlan
+	testEnv string // the copied .env.testing; empty when there is none to edit
+}
+
+// planWorkspaceEnv gives the workspace its own test databases and Redis
+// databases. A .env.testing that git tracks is left alone, since the edit
+// would show up as a change to commit.
+func planWorkspaceEnv(main, wtPath, suffix, parentEnv string) (workspaceEnv, error) {
+	var plan workspaceEnv
+	data, err := os.ReadFile(filepath.Join(wtPath, ".env.testing"))
+	hasTestEnv := err == nil
+	if err != nil && !os.IsNotExist(err) {
+		return plan, err
 	}
-	if err != nil {
-		return workspace.TestEnvPlan{}, err
-	}
-	if workspace.IsTracked(main, ".env.testing") {
+	if hasTestEnv && workspace.IsTracked(main, ".env.testing") {
 		fmt.Println("  warning: git tracks .env.testing, so routa left it alone and tests use the parent's test databases")
-		return workspace.TestEnvPlan{}, nil
+		hasTestEnv = false
 	}
+	testEnv := map[string]string{}
+	if hasTestEnv {
+		plan.testEnv = string(data)
+		testEnv = workspace.ParseEnv(plan.testEnv)
+		plan.tests = workspace.PlanTestDatabases(testEnv, suffix)
+	}
+
 	checkouts := []string{main}
 	if wts, err := workspace.ListWorktrees(main); err == nil {
 		for _, wt := range wts {
@@ -258,15 +280,23 @@ func writeWorkspaceTestEnv(main, wtPath, suffix, parentEnv string) (workspace.Te
 			}
 		}
 	}
-	plan, err := workspace.PlanTestEnv(workspace.ParseEnv(string(data)), workspace.ParseEnv(parentEnv), suffix, workspace.UsedRedisDatabases(checkouts))
-	if err != nil || len(plan.Set) == 0 {
-		return plan, err
+	parent := workspace.ParseEnv(parentEnv)
+	port := parent["REDIS_PORT"]
+	if port == "" {
+		port = services.RedisDefaultPort
 	}
-	if err := os.WriteFile(path, []byte(workspace.RewriteEnv(string(data), "", "", plan.Set)), 0o600); err != nil {
-		return plan, err
+	plan.redis, err = workspace.PlanRedis(parent, testEnv, hasTestEnv, workspace.UsedRedisDatabases(checkouts), services.RedisDatabaseCount(port))
+	return plan, err
+}
+
+func mergeEnv(sets ...map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, set := range sets {
+		for k, v := range set {
+			out[k] = v
+		}
 	}
-	fmt.Println("→ wrote .env.testing with the workspace's test databases")
-	return plan, nil
+	return out
 }
 
 // workspaceDB is what a new workspace does about its database.
@@ -455,6 +485,7 @@ type workspaceListEntry struct {
 	Database                  string `json:"database,omitempty"`
 	SharesParentDatabase      bool   `json:"shares_parent_database"`
 	SharesParentTestDatabases bool   `json:"shares_parent_test_databases"`
+	SharesParentRedis         bool   `json:"shares_parent_redis"`
 }
 
 func readEnvFile(path string) map[string]string {
@@ -492,6 +523,9 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 			e.SharesParentDatabase = hasParentDB && own.Same(parentDB)
 		}
 		e.SharesParentTestDatabases = len(workspace.SharedTestDatabases(readEnvFile(filepath.Join(main, ".env.testing")), readEnvFile(filepath.Join(wt.Path, ".env.testing")))) > 0
+		if fileExists(filepath.Join(wt.Path, ".env")) {
+			e.SharesParentRedis = len(workspace.SharedRedisDatabases(readEnvFile(filepath.Join(main, ".env")), readEnvFile(filepath.Join(wt.Path, ".env")))) > 0
+		}
 		entries = append(entries, e)
 	}
 	if workspaceListJSON {
@@ -503,10 +537,13 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 	}
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tBRANCH\tURL\tDATABASE\tPATH")
-	var sharing, sharingTests []string
+	var sharing, sharingTests, sharingRedis []string
 	for _, e := range entries {
 		if e.SharesParentTestDatabases {
 			sharingTests = append(sharingTests, e.Name)
+		}
+		if e.SharesParentRedis {
+			sharingRedis = append(sharingRedis, e.Name)
 		}
 		branch, url, database := e.Branch, e.URL, e.Database
 		if branch == "" {
@@ -541,6 +578,12 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 			fmt.Fprintln(cmd.OutOrStderr())
 		}
 		fmt.Fprintf(cmd.OutOrStderr(), "! %s runs tests against the parent's test databases; add its name to each database in its .env.testing.\n", name)
+	}
+	for i, name := range sharingRedis {
+		if i == 0 {
+			fmt.Fprintln(cmd.OutOrStderr())
+		}
+		fmt.Fprintf(cmd.OutOrStderr(), "! %s uses the parent's Redis databases; give it its own REDIS_DB and REDIS_CACHE_DB in .env.\n", name)
 	}
 	return nil
 }

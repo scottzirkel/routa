@@ -18,8 +18,9 @@ Herd 2 parity work (Herd 2.0 shipped in October 2026 for macOS and Windows).
   `routa workspace list` flags worktrees that do. MySQL and MariaDB copies
   stay on the server (schema dump, then `INSERT … SELECT` per table), and
   `aff_main` copies are named `aff_<name>`. The copied `.env.testing` gets
-  the workspace name on every test database and its own Redis database
-  numbers. `rm` and the new `routa workspace prune` drop the test databases
+  the workspace name on every test database, and the app and its tests each
+  get their own Redis database numbers; routa's Redis now has 64 databases
+  so there are enough. `rm` and the new `routa workspace prune` drop the test databases
   that removed worktrees left behind, such as `testing_4764` and its
   `_test_N` copies.
 - **Git worktree subdomains** — worktrees routa did not create, such as the

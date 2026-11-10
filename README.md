@@ -532,19 +532,25 @@ setting. Wildcard hosts cover the app's subdomains, such as
   of `.env.testing`. Test databases are created on the fly, so they are only
   renamed: every database name gets the workspace name, so `testing` becomes
   `testing_5194` and `affiliate_testing` becomes `affiliate_testing_5194`.
-  Laravel's parallel copies follow as `testing_5194_test_1`. `REDIS_DB` and
-  `REDIS_CACHE_DB` get numbers no other checkout's `.env` or `.env.testing`
-  uses, picked from 15 down, because a test that flushes Redis would
-  otherwise clear another checkout's data. A `.env.testing` that git tracks is
-  left alone.
+  Laravel's parallel copies follow as `testing_5194_test_1`. A `.env.testing`
+  that git tracks is left alone.
+- Gives the workspace its own Redis databases, one set in `.env` for the app
+  and another in `.env.testing` for its tests. `REDIS_DB`, `REDIS_CACHE_DB`,
+  and any other `REDIS_*_DB` the parent sets get numbers no other checkout
+  uses, picked from the top down. Separate databases, not just a key prefix,
+  because a flush such as `cache:clear` with a Redis cache, or a test that
+  clears the cache, empties a whole database. This needs routa's Redis, which
+  has 64 databases (four per workspace); other Redis servers are assumed to
+  have 16.
 
 Workspaces never share the parent's database, so a migration, `migrate:fresh`,
 or seeder run in a workspace cannot change the parent's data. When routa
 cannot give a workspace its own database, for example because `.env` uses
 `DB_URL` or a `DB_CONNECTION` routa does not support, `add` refuses before
 creating anything. `routa workspace list` marks any worktree whose `.env`
-still points at the parent's database, or whose `.env.testing` still names the
-parent's test databases, such as one an agent created by hand.
+still points at the parent's database, whose `.env.testing` still names the
+parent's test databases, or whose `.env` uses the parent's Redis databases,
+such as one an agent created by hand.
 
 Cloning uses the credentials in the parent's `.env`. A MySQL or MariaDB copy
 never leaves the server: routa creates the tables from a schema-only dump,
@@ -595,6 +601,10 @@ package manager. It writes `routa-redis.service`, stores Redis data under
 `~/.local/share/routa/services/redis/`, and binds Redis to localhost on
 `:6379` by default. Pass `--port` or `on <port>` to avoid an existing
 Redis-compatible service such as Valkey.
+
+routa's Redis offers 64 databases instead of Redis's default 16, so each
+[workspace](#workspaces) can have its own. Run `routa redis restart` once to
+pick this up on an existing install; data is kept.
 
 ## Mailpit
 
