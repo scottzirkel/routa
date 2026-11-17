@@ -35,8 +35,8 @@ var workspaceCmd = &cobra.Command{
 	Long: `A workspace is a git worktree of a site's repository with its own .test
 domain, so several branches (or coding agents) can run side by side.
 
-'routa workspace add 5194' inside ~/code/shop creates ~/code/shop-5194 on a new
-branch, served at https://shop-5194.test. routa copies the parent's ignored
+'routa workspace add 5194' inside ~/code/shop creates ~/code/shop-worktrees/5194
+on a new branch, served at https://shop-5194.test. routa copies the parent's ignored
 files that a working copy needs (.env, vendor/, node_modules/, build output),
 using copy-on-write on filesystems that support it, and renames the site's
 hosts in the new .env. Subdomains such as app.shop-5194.test work too.
@@ -48,7 +48,8 @@ make inside the repository, at <site>-<folder name>.test after 'routa reload'.`,
 var workspaceAddCmd = &cobra.Command{
 	Use:   "add <name>",
 	Short: "Create a worktree of the current site with its own .test domain",
-	Long: `Creates a worktree beside the current site's repository and serves it.
+	Long: `Creates a worktree in <repo>-worktrees/<name>, beside the current site's
+repository, and serves it at <site>-<name>.test.
 
 Every workspace gets its own database, read from the parent's .env; it never
 shares the parent's, so migrations and seeders in a workspace cannot touch the
@@ -173,9 +174,16 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 	if suffix == "" {
 		return fmt.Errorf("invalid workspace name %q", args[0])
 	}
-	wtPath := filepath.Join(filepath.Dir(main), filepath.Base(main)+"-"+suffix)
+	wtPath := filepath.Join(site.WorkspacesDir(main), suffix)
 	if _, err := os.Lstat(wtPath); err == nil {
 		return fmt.Errorf("%s already exists", wtPath)
+	}
+	if wts, err := workspace.ListWorktrees(main); err == nil {
+		for _, wt := range wts {
+			if site.WorktreeSuffix(main, wt.Path) == suffix {
+				return fmt.Errorf("worktree %s already has the name %s", wt.Path, suffix)
+			}
+		}
 	}
 	branch := workspaceBranch
 	if branch == "" {
@@ -203,6 +211,9 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 		fmt.Printf("→ creating worktree %s on new branch %s from %s\n", wtPath, branch, from)
 	} else {
 		fmt.Printf("→ creating worktree %s on existing branch %s\n", wtPath, branch)
+	}
+	if err := os.MkdirAll(filepath.Dir(wtPath), 0o755); err != nil {
+		return err
 	}
 	if err := workspace.AddWorktree(main, wtPath, branch, from); err != nil {
 		return err
@@ -662,6 +673,8 @@ func runWorkspaceRm(_ *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Printf("→ removed worktree %s\n", target.Path)
+	// The folder that held it goes too once it is empty.
+	_ = os.Remove(site.WorkspacesDir(main))
 	switch {
 	case drop.name == "":
 	case drop.sharedWith != "":

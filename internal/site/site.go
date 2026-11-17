@@ -176,7 +176,7 @@ func (s *State) sources() map[string]siteSource {
 		}
 		root := s.ParkedRoots[dir]
 		for _, e := range entries {
-			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || isWorkspacesDir(dir, e.Name()) {
 				continue
 			}
 			name := strings.ToLower(e.Name())

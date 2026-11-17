@@ -498,7 +498,7 @@ several branches, or several coding agents, can run the same app side by side.
 
 ```bash
 cd ~/code/shop
-routa workspace add 5194                    # ~/code/shop-5194 with its own copy of the database
+routa workspace add 5194                    # ~/code/shop-worktrees/5194 with its own copy of the database
 routa workspace add login --branch fix/login --from HEAD
 routa workspace add 5195 --database empty   # fresh database, migrated
 routa workspace list
@@ -511,7 +511,11 @@ Workspace commands act on the site whose git repository holds the current
 folder. From anywhere else, name the site with `--site`, as in
 `routa workspace rm 5194 --site shop`.
 
-`add` creates the worktree beside the repository and serves it at
+`add` creates the worktree in a folder beside the repository named for it,
+such as `~/code/shop-worktrees/5194`, so workspaces stay apart from the other
+folders in `~/code`. routa does not serve that folder as a site of its own,
+and `rm` deletes it once its last workspace is gone. Worktrees made before
+this layout keep working where they are. The workspace is served at
 `https://shop-5194.test`, with the parent's docroot, PHP version, and HTTPS
 setting. Wildcard hosts cover the app's subdomains, such as
 `app.shop-5194.test`. The new branch starts from the remote's main branch,

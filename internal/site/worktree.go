@@ -99,6 +99,29 @@ func GitWorktrees(repo string) []string {
 	return out
 }
 
+// workspacesDirSuffix ends the name of the folder that holds a repository's
+// workspaces, such as shop-worktrees beside shop.
+const workspacesDirSuffix = "-worktrees"
+
+// WorkspacesDir is the folder `routa workspace add` puts the repository's
+// worktrees in: ~/code/shop's go in ~/code/shop-worktrees, so they stay
+// apart from the other folders beside the repository.
+func WorkspacesDir(repo string) string {
+	return filepath.Join(filepath.Dir(repo), filepath.Base(repo)+workspacesDirSuffix)
+}
+
+// isWorkspacesDir reports whether the folder name inside dir holds the
+// workspaces of a repository beside it, such as shop-worktrees beside shop.
+// That folder is not a site of its own.
+func isWorkspacesDir(dir, name string) bool {
+	repo, ok := strings.CutSuffix(name, workspacesDirSuffix)
+	if !ok || repo == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(dir, repo, ".git"))
+	return err == nil
+}
+
 var nonLabelChars = regexp.MustCompile(`[^a-z0-9]+`)
 
 // WorktreeSuffix is the part of a worktree's folder name that identifies it:

@@ -5,7 +5,13 @@ priority, not commitment.
 
 ## Pending release
 
-- None.
+- **Workspaces get their own folder** — `routa workspace add 5194` in
+  `~/code/shop` now creates `~/code/shop-worktrees/5194` instead of
+  `~/code/shop-5194`, so workspaces no longer mix with the other folders in
+  `~/code`. The URL is still `https://shop-5194.test`. routa does not serve
+  `shop-worktrees` as a site, `rm` deletes it once it is empty, and `add`
+  refuses a name an existing worktree already has. Worktrees in the old
+  layout keep working.
 
 ## Released
 

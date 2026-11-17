@@ -187,3 +187,39 @@ func TestWorktreeSuffixStripsTheRepoFolderName(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkspacesDirSitsBesideTheRepo(t *testing.T) {
+	if got := WorkspacesDir("/code/shop"); got != "/code/shop-worktrees" {
+		t.Fatalf("WorkspacesDir = %q, want /code/shop-worktrees", got)
+	}
+}
+
+func TestWorktreeInWorkspacesDirIsServedUnderTheParentName(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	code := t.TempDir()
+	repo := filepath.Join(code, "shop")
+	wt := filepath.Join(code, "shop-worktrees", "5194")
+	fakeRepo(t, repo)
+	fakeWorktree(t, repo, wt, filepath.Join(wt, ".git"))
+
+	s := &State{Parked: []string{code}}
+	sites := worktreeSites(t, s)
+
+	if len(sites) != 2 {
+		t.Fatalf("sites = %#v, want shop and shop-5194 only", sites)
+	}
+	if r := sites["shop-5194"]; r.Path != wt || r.WorktreeOf != "shop" {
+		t.Fatalf("workspace site = %#v", r)
+	}
+}
+
+func TestWorktreesFolderWithoutARepoBesideItIsStillASite(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	code := t.TempDir()
+	mustWrite(t, filepath.Join(code, "blog-worktrees", "public", "index.php"), "<?php")
+
+	s := &State{Parked: []string{code}}
+	if _, ok := worktreeSites(t, s)["blog-worktrees"]; !ok {
+		t.Fatal("blog-worktrees has no blog repository beside it, so it should stay a site")
+	}
+}
