@@ -5,7 +5,20 @@ priority, not commitment.
 
 ## Pending release
 
-- None.
+- **Workspace setup steps** — a site can list setup steps in `.routa.json`
+  in its main checkout. `routa workspace add` makes sure the listed routa
+  services are running, then runs the setup commands in the new worktree with
+  the site's PHP on `PATH`, such as `npm run build`, so a workspace never tests
+  against the parent's build. `--run` and `--service` add steps for one
+  workspace and `--no-run` skips the site's commands. The first failing
+  command stops the rest and keeps the workspace, and `add` prints the
+  `routa workspace setup` command that finishes it. `add --json` reports each
+  command's exit code and time. (#1)
+- **Workspace actions** — commands that keep running for a workspace, such as
+  a queue worker, listed under `workspace.actions` in `.routa.json`. They run
+  as systemd user units with logs and restart after a crash, and start with
+  `routa workspace start` or `add --start`. `stop`, `restart`, `actions`, and
+  `logs` manage them, and `rm` and `prune` stop them with the worktree. (#2)
 
 ## Released
 

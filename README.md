@@ -103,7 +103,9 @@ routa track / untrack / ignore / unignore / link / unlink / alias / unalias / is
 routa proxy <name> <port>       # reverse-proxy <name>.test → 127.0.0.1:<port>
 routa dev [name]                # run a detected dev server and proxy it
 routa workspace add <name>      # git worktree of this site at <site>-<name>.test
+routa workspace add <name> --run "npm run build" --start   # plus setup and actions
 routa workspace list [--json] / rm <name> / fix <name> / prune [--dry-run]
+routa workspace setup <name> / start <name> / stop <name> / actions <name> / logs <name> <action>
 routa redis start [--port 6380] / stop / restart / status
 routa mail start on 8026 --smtp-port 1026 / stop / restart / status / proxy
 routa db start mariadb 11.4 on 3307
@@ -118,8 +120,10 @@ routa version                   # print version, commit, build date
 
 Read-only listings take `--json` for scripts and coding agents: `routa status`,
 `routa doctor`, `routa php list`, `routa db list`, `routa search list`,
-`routa storage list`, `routa workspace list`, and `routa version`. An empty
-list prints `[]`. Saved database passwords are never included.
+`routa storage list`, `routa workspace list`, `routa workspace actions`, and
+`routa version`. An empty list prints `[]`. Saved database passwords are never
+included. `routa workspace add --json` and `routa workspace setup --json` print
+their progress to stderr and a summary to stdout.
 
 `park` and `unpark` are aliases for `track` and `untrack` for Valet users.
 
@@ -501,6 +505,8 @@ cd ~/code/shop
 routa workspace add 5194                    # ~/code/shop-worktrees/5194 with its own copy of the database
 routa workspace add login --branch fix/login --from HEAD
 routa workspace add 5195 --database empty   # fresh database, migrated
+routa workspace add 5292 --run "npm run build"   # build once the workspace is ready
+routa workspace start 5292                  # start its actions, such as a queue worker
 routa workspace list
 routa workspace rm 5194 --drop-database
 routa workspace fix 4885 --dry-run          # what a hand-made worktree is missing
@@ -601,6 +607,84 @@ keep cleanup away from anything else:
 - The main checkout's own test databases, any database a routa site's or
   worktree's `.env` or `.env.testing` names, and any database with an open
   connection are never dropped.
+
+### Setup steps
+
+A site can list setup steps that every new workspace gets, in `.routa.json` in
+its main checkout, next to `.routa-env.php`:
+
+```json
+{
+  "workspace": {
+    "services": ["redis", "meilisearch:1.12"],
+    "run": ["npm run build", "composer test:setup"],
+    "actions": {
+      "queue": "php artisan queue:work"
+    }
+  }
+}
+```
+
+Once the files and the database are ready, `add` runs these steps in order:
+
+1. **Services.** Each routa service in `services` must be running: `redis`,
+   `mailpit`, `meilisearch`, `typesense`, or `minio`. The last three take a
+   version, such as `meilisearch:1.12`. Without one, routa uses the version
+   that is running, or the only one installed. A service that is not running
+   starts on the ports it already has. Services start before the worktree is
+   created, so one that cannot start stops `add` before anything exists.
+   Databases are not listed here: `add` copies the parent's database, so its
+   server is already running.
+2. **Setup commands.** Each command in `run` runs in the worktree with `sh`,
+   with the site's routa PHP first on `PATH`. Node and other tools come from
+   your own `PATH`, since routa does not manage Node. Commands get no input,
+   so one that asks a question fails instead of waiting.
+3. **Actions**, when you pass `--start`. See [Actions](#actions).
+
+Flags add to the file for one workspace: `--service <name>` and
+`--run "<command>"` can each be given more than once, and `--run` commands run
+after the site's. `--no-run` skips the site's commands.
+
+The first command that fails stops the rest. `add` keeps the workspace, since
+everything before the commands worked, and exits non-zero. It names the
+command, its exit code, and the end of its output, then prints the
+`routa workspace setup` command that runs the failed command and the ones
+after it, and the `routa workspace rm` command that removes the workspace.
+`routa workspace setup <name>` runs the same steps in any existing worktree,
+with the same flags.
+
+`--json` prints progress to stderr and a summary to stdout. The summary lists
+each service, each command with its exit code and how long it took (plus the
+end of its output when it failed), and each action.
+
+### Actions
+
+Actions are commands that keep running for a workspace, such as a queue
+worker. The site names them under `workspace.actions` in `.routa.json`.
+
+```bash
+routa workspace start 5292            # start all of the site's actions
+routa workspace start 5292 queue      # or only the ones named
+routa workspace actions 5292 [--json] # which are running
+routa workspace logs 5292 queue [-f]  # their output
+routa workspace restart 5292 queue    # pick up a changed command
+routa workspace stop 5292             # stop them all
+```
+
+Each action runs in the worktree as a systemd user unit named
+`routa-action-<site>_<action>.service`, with the site's routa PHP first on
+`PATH` and the rest of `PATH` from the shell that starts it. systemd keeps its
+logs and restarts it after a crash. An action that keeps crashing stops and
+shows as failed, with its exit code. Actions start only when asked, with
+`start` or with `add --start`, so a workspace an agent creates does not start
+background processes unless asked. `rm` stops a workspace's actions before it
+removes the worktree, and `prune` stops the actions of worktrees removed
+another way.
+
+A command that finishes, such as a build, belongs in `run`, not in actions.
+Take care with a Vite action: a running Vite writes `public/hot`, and while
+that file exists a Laravel app loads its scripts and styles from Vite instead
+of the built files. Stop it before browser tests that should use the build.
 
 ### Standard ports
 

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -846,16 +847,26 @@ type phpCLIContext struct {
 }
 
 func currentPHPContext() (*phpCLIContext, error) {
-	st, err := site.Load()
-	if err != nil {
-		return nil, err
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
+	return phpContextForDir(cwd)
+}
 
-	matches := st.ResolvePath(cwd)
+// errNoPHPConfigured means routa has no PHP version for a folder: no site
+// there names one and there is no default.
+var errNoPHPConfigured = errors.New("no routa PHP version is configured. Run: routa php install <version>")
+
+// phpContextForDir picks the PHP that the sites serving dir use, or the
+// default PHP when no PHP site serves it.
+func phpContextForDir(dir string) (*phpCLIContext, error) {
+	st, err := site.Load()
+	if err != nil {
+		return nil, err
+	}
+
+	matches := st.ResolvePath(dir)
 	specs := map[string]bool{}
 	var siteNames []string
 	for _, match := range matches {
@@ -875,12 +886,12 @@ func currentPHPContext() (*phpCLIContext, error) {
 		sort.Strings(resolved)
 		if len(resolved) > 1 {
 			sort.Strings(siteNames)
-			return nil, fmt.Errorf("current directory matches sites with different PHP versions (%s): %s", strings.Join(resolved, ", "), strings.Join(siteNames, ", "))
+			return nil, fmt.Errorf("%s matches sites with different PHP versions (%s): %s", dir, strings.Join(resolved, ", "), strings.Join(siteNames, ", "))
 		}
 		spec = resolved[0]
 	}
 	if spec == "" {
-		return nil, fmt.Errorf("no routa PHP version is configured. Run: routa php install <version>")
+		return nil, errNoPHPConfigured
 	}
 	if err := requirePHP(spec); err != nil {
 		return nil, err

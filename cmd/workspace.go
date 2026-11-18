@@ -58,7 +58,34 @@ MariaDB, Postgres, or SQLite database into a new one named <database>_<name>.
 --database empty creates that database empty and runs 'php artisan migrate'
 when the app has artisan. When routa cannot give the workspace its own
 database, for example because .env uses DB_URL, it refuses before creating
-anything.`,
+anything.
+
+Once the files and database are ready, add runs the site's setup from
+` + workspace.ProjectFile + ` in its main checkout, plus any flags:
+
+  {
+    "workspace": {
+      "services": ["redis", "meilisearch:1.12"],
+      "run": ["npm run build", "composer test:setup"],
+      "actions": {"queue": "php artisan queue:work"}
+    }
+  }
+
+1. Services: routa services that must be running, such as redis, mailpit,
+   meilisearch, typesense, or minio. Add more with --service. They start
+   before the worktree is created, so a service that cannot start stops add
+   before anything exists.
+2. Setup commands: run in order in the worktree with sh, with routa's PHP for
+   the site first on PATH, and with no input. --run adds commands after the
+   site's; --no-run skips the site's. The first command that fails stops the
+   rest. The workspace is kept, and add exits non-zero and says how to finish
+   with 'routa workspace setup'.
+3. Actions: commands that keep running, such as a queue worker. --start
+   starts them as systemd user units once setup succeeds; otherwise start
+   them later with 'routa workspace start'. See 'routa workspace start --help'.
+
+--json prints progress to stderr and a summary to stdout, with each command's
+exit code and how long it took.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runWorkspaceAdd,
 }
@@ -75,9 +102,9 @@ var workspaceRmCmd = &cobra.Command{
 	Use:     "rm <name>",
 	Aliases: []string{"remove"},
 	Short:   "Remove a worktree of the current site",
-	Long: `Removes a worktree and stops serving it. git refuses to remove a worktree
-with changes or untracked files unless --force is passed; ignored files such
-as vendor/ do not count. The branch is kept.
+	Long: `Stops the worktree's actions, removes it, and stops serving it. git refuses
+to remove a worktree with changes or untracked files unless --force is passed;
+ignored files such as vendor/ do not count. The branch is kept.
 
 The workspace's database is kept unless --drop-database is passed. routa only
 ever drops a database on the parent's server that differs from the parent's
@@ -88,10 +115,12 @@ own; a SQLite file goes with the worktree.`,
 
 var workspacePruneCmd = &cobra.Command{
 	Use:   "prune",
-	Short: "Drop test databases that removed worktrees left behind",
-	Long: `Drops the test databases of worktrees that no longer exist. 'routa workspace
-rm' does this after every removal; run it yourself after removing a worktree
-another way, such as with 'git worktree remove'.
+	Short: "Clean up after worktrees removed another way: actions and test databases",
+	Long: `Stops the actions of worktrees whose folder is gone, and drops the test
+databases of worktrees that no longer exist. 'routa workspace rm' does both
+for the worktree it removes, and drops the test databases after every removal;
+run prune yourself after removing a worktree another way, such as with
+'git worktree remove'.
 
 A database counts as left behind when it is named <test database>_<name>, such
 as testing_4764, after one of the main checkout's test databases, and no
@@ -105,6 +134,9 @@ with APP_ENV=testing.`,
 		main, _, _, err := workspaceRepo()
 		if err != nil {
 			return err
+		}
+		if err := pruneOrphanActions(workspaceDryRun); err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: could not stop the actions of removed worktrees: %v\n", err)
 		}
 		return pruneStaleTestDatabases(main, workspaceDryRun)
 	},
@@ -161,7 +193,55 @@ func workspaceRepo() (main, parent string, st *site.State, err error) {
 	return main, parent, st, nil
 }
 
+// workspaceTarget is an existing workspace and the site it belongs to.
+type workspaceTarget struct {
+	main   string
+	parent string
+	st     *site.State
+	name   string // the worktree's name, such as 5194
+	path   string
+	site   string // the site that serves it, such as shop-5194
+}
+
+// resolveWorkspace finds the worktree named name of the site workspace
+// commands act on.
+func resolveWorkspace(name string) (workspaceTarget, error) {
+	main, parent, st, err := workspaceRepo()
+	if err != nil {
+		return workspaceTarget{}, err
+	}
+	wts, err := workspace.ListWorktrees(main)
+	if err != nil {
+		return workspaceTarget{}, err
+	}
+	want := site.WorktreeSuffix(main, name)
+	for _, wt := range wts {
+		if site.WorktreeSuffix(main, wt.Path) == want && fileExists(wt.Path) {
+			return workspaceTarget{
+				main:   main,
+				parent: parent,
+				st:     st,
+				name:   want,
+				path:   wt.Path,
+				site:   workspaceSiteName(st, parent, main, wt.Path),
+			}, nil
+		}
+	}
+	return workspaceTarget{}, fmt.Errorf("no worktree named %s; see 'routa workspace list'", name)
+}
+
+// workspaceSiteName is the site that serves a worktree: the one a tracked
+// folder gives it, or else <parent>-<name>.
+func workspaceSiteName(st *site.State, parent, main, wtPath string) string {
+	if sites := sitesAtPath(st, wtPath); len(sites) > 0 {
+		return sites[0].Name
+	}
+	return site.WorktreeSiteName(parent, main, wtPath)
+}
+
 func runWorkspaceAdd(_ *cobra.Command, args []string) error {
+	stdout, restore := jsonProgress()
+	defer restore()
 	mode := workspaceDatabase
 	if mode != "clone" && mode != "empty" {
 		return fmt.Errorf("--database must be clone or empty; workspaces never share the parent's database")
@@ -206,6 +286,17 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	setup, err := planWorkspaceSetup(main)
+	if err != nil {
+		return err
+	}
+	// Services are shared by every site, so they start before anything is
+	// created: when one cannot start, there is nothing to clean up.
+	res := newWorkspaceResult(suffix, wtPath)
+	res.Services, err = ensureServices(setup.services)
+	if err != nil {
+		return err
+	}
 
 	if from != "" {
 		fmt.Printf("→ creating worktree %s on new branch %s from %s\n", wtPath, branch, from)
@@ -232,10 +323,7 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 		return fail(err)
 	}
 
-	newSite := site.WorktreeSiteName(parent, main, wtPath)
-	if sites := sitesAtPath(st, wtPath); len(sites) > 0 {
-		newSite = sites[0].Name
-	}
+	newSite := workspaceSiteName(st, parent, main, wtPath)
 	envPlan, err := planWorkspaceEnv(main, wtPath, suffix, string(envContent))
 	if err != nil {
 		return fail(err)
@@ -267,7 +355,14 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Printf("\nworkspace %s ready\n", suffix)
+	t := workspaceTarget{main: main, parent: parent, st: st, name: suffix, path: wtPath, site: newSite}
+	setupErr := finishSetup(t, setup, &res, setupHint{name: suffix, path: wtPath})
+
+	if setupErr == nil {
+		fmt.Printf("\nworkspace %s ready\n", suffix)
+	} else {
+		fmt.Printf("\nworkspace %s created, but its setup did not finish\n", suffix)
+	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintf(w, "  path\t%s\n", wtPath)
 	fmt.Fprintf(w, "  branch\t%s\n", branch)
@@ -284,7 +379,23 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 	if len(redis.Tests) > 0 {
 		fmt.Fprintf(w, "  test redis\t%s\n", redis.Summary(redis.Tests))
 	}
-	return w.Flush()
+	if s := setupSummary(res.Commands); s != "" {
+		fmt.Fprintf(w, "  setup\t%s\n", s)
+	}
+	if s := actionsSummary(res.Actions); s != "" {
+		fmt.Fprintf(w, "  actions\t%s\n", s)
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if workspaceJSON {
+		res.Branch, res.URL, res.Database = branch, "https://"+newSite+".test", db.summary
+		res.OK = setupErr == nil
+		if err := writeJSON(stdout, res); err != nil {
+			return err
+		}
+	}
+	return setupErr
 }
 
 // workspaceEnv is what a new workspace changes in its .env and .env.testing.
@@ -664,6 +775,10 @@ func runWorkspaceRm(_ *cobra.Command, args []string) error {
 	cwd, _ := os.Getwd()
 	if rel, err := filepath.Rel(target.Path, cwd); err == nil && !strings.HasPrefix(rel, "..") {
 		return fmt.Errorf("you are inside %s; run this from the parent checkout", target.Path)
+	}
+	// Actions run inside the worktree, so they stop before it goes.
+	if err := stopActionsUnder(target.Path); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: could not stop the workspace's actions: %v\n", err)
 	}
 
 	// Read the workspace's databases before git deletes its .env files.
