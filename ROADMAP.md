@@ -5,6 +5,12 @@ priority, not commitment.
 
 ## Pending release
 
+- None.
+
+## Released
+
+### v1.15.0 — Workspace setup steps and actions
+
 - **Workspace setup steps** — a site can list setup steps in `.routa.json`
   in its main checkout. `routa workspace add` makes sure the listed routa
   services are running, then runs the setup commands in the new worktree with
@@ -19,8 +25,6 @@ priority, not commitment.
   as systemd user units with logs and restart after a crash, and start with
   `routa workspace start` or `add --start`. `stop`, `restart`, `actions`, and
   `logs` manage them, and `rm` and `prune` stop them with the worktree. (#2)
-
-## Released
 
 ### v1.14.0 — Workspaces in their own folder
 
