@@ -6,7 +6,9 @@ pkgdesc='Linux local-development server for PHP, static, and proxied dev-server 
 arch=('x86_64' 'aarch64')
 url='https://github.com/scottzirkel/routa'
 license=('custom')
-depends=('caddy' 'p11-kit' 'systemd')
+# routa's PHP builds load libstdc++ and libgcc from the system so they can load
+# shared extensions such as Xdebug.
+depends=('caddy' 'libgcc' 'libstdc++' 'p11-kit' 'systemd')
 optdepends=(
   'redis: Redis optional service'
   'mailpit: Mailpit optional service'

@@ -9,8 +9,8 @@ It gives you a fast terminal workflow for local sites: track a directory, link
 a project, ignore stale tracked sites, pin PHP versions per site, proxy
 frontend dev servers, and inspect the
 whole stack with one doctor command. routa uses Caddy, systemd user services,
-systemd-resolved, and static PHP builds instead of running its own long-lived
-daemon.
+systemd-resolved, and its own PHP builds instead of running its own
+long-lived daemon.
 
 ## What routa manages
 
@@ -27,7 +27,7 @@ daemon.
 
 routa targets Linux desktops with systemd user services and systemd-resolved.
 It serves local sites under `.test`, binds Caddy to localhost, and manages PHP
-through static builds under `~/.local/share/routa/php/`.
+through its own builds under `~/.local/share/routa/php/`.
 
 Intentionally out of scope: a GUI app, automatic in-place binary updates, macOS
 support, non-systemd init systems, and arbitrary local TLDs. Tagged GitHub
@@ -63,7 +63,7 @@ line to add to your shell rc.
 ```bash
 routa init                      # diagnose host resolver and required binaries
 routa install                   # provision services on alt ports (DNS :1053, :8080/:8443)
-routa php install 8.4           # fetch a static PHP build
+routa php install 8.5           # fetch a PHP build
 routa track ~/code              # any subdir becomes <subdir>.test and *.<subdir>.test
 routa track ~/apps --root dist  # every child serves its own dist/ dir
 routa link                      # link the current dir as <basename>.test
@@ -223,11 +223,30 @@ the site-name entry, such as `app` for `app.test`, overrides or extends it.
 For Valet migration compatibility, `.valet-env.php` uses the same format when
 `.routa-env.php` is absent.
 
+## PHP builds
+
+`routa php install` downloads routa's own PHP builds from the
+[`php-builds`](https://github.com/scottzirkel/routa/releases/tag/php-builds)
+release and checks each download against the release's `SHA256SUMS`. A GitHub
+workflow builds them with [static-php-cli](https://github.com/crazywhalecc/static-php-cli),
+checks php.net every week, and publishes new patch releases as they come out.
+Today it builds PHP 8.5.
+
+Both the CLI and PHP-FPM can load shared extensions, such as Xdebug, pcov, or
+one you build yourself. That needs three libraries from the system: glibc,
+`libstdc++`, and `libgcc`. Every glibc-based Linux desktop has them. Everything
+else is built into the binaries.
+
+The older static-php.dev `gnu-bulk` builds stopped updating in July 2026. routa
+still installs the versions that channel has, such as 8.4.20, when routa has no
+build of its own for them. Those builds cannot load shared extensions in
+PHP-FPM; see [below](#older-static-phpdev-builds-cannot-load-shared-extensions).
+
 ## PHP extensions
 
-The bundled PHP builds use the upstream static-php-cli `gnu-bulk` profile.
-Most extensions are compiled into the PHP binary, so routa lists what is
-available:
+Most extensions are compiled into the PHP binary: the same set as the
+static-php.dev `gnu-bulk` builds, minus IMAP, which PHP itself dropped in 8.4.
+The list lives in `scripts/php-extensions.txt`. routa lists what is available:
 
 ```bash
 routa php ext list
@@ -235,7 +254,25 @@ routa php ext list
 
 When no version is provided, routa uses the PHP version selected for the current
 directory or the default PHP version. Pass an explicit version, such as
-`routa php ext list 8.4`, to inspect a different installation.
+`routa php ext list 8.5`, to inspect a different installation.
+
+### Adding your own extensions and settings
+
+Put extra `.ini` files in `~/.config/routa/php/<minor>/conf.d/`, for example
+`~/.config/routa/php/8.5/conf.d/`. routa adds them, in file name order, after
+its own settings for both the CLI and PHP-FPM, so you can load extensions
+without touching routa's files:
+
+```ini
+; ~/.config/routa/php/8.5/conf.d/20-swoole-extra.ini
+extension = /home/me/php-ext/8.5/my_extension.so
+```
+
+`extension=` and `zend_extension=` lines add up. Any other setting replaces
+routa's value for that key. The folder is per minor version because a compiled
+extension works with every patch release of the PHP minor it was built for.
+`routa php` picks up changes on its next run; restart PHP-FPM with
+`routa restart php 8.5` for sites.
 
 ## Xdebug
 
@@ -260,6 +297,9 @@ installation. `status` reports the managed `zend_extension` path when Xdebug is
 available. `routa php xdebug install [version]` can fetch the extension later
 without reinstalling PHP if the artifact was not available during the original
 PHP install.
+
+With routa's own builds, Xdebug also loads into PHP-FPM, so step debugging works
+for browser requests as well as the CLI.
 
 Note that the default mode deliberately leaves out `coverage` — routa hands code
 coverage to pcov instead. See below.
@@ -291,7 +331,10 @@ configuration. Turning pcov off hands coverage back to Xdebug, which then needs
 `pcov.directory` in `phpunit.xml` rather than routa's ini — routa's is shared by
 every site on that PHP version.
 
-### Shared extensions need a dynamically-linked CLI
+### Older static-php.dev builds cannot load shared extensions
+
+routa's own builds load shared extensions in both the CLI and PHP-FPM, so this
+section only applies to versions installed from static-php.dev, such as 8.4.20.
 
 The upstream `gnu-bulk` PHP builds link glibc **statically**, and Linux cannot
 `dlopen` into such a binary. Those builds therefore cannot load pcov, Xdebug, or
@@ -993,7 +1036,7 @@ instead of guessing how to interpret it.
 
 - **DNS:** tiny Go responder for `*.test` on `127.0.0.1:1053` (`miekg/dns`). Zero upstream config — answers `127.0.0.1` for `*.test`, NXDOMAIN otherwise.
 - **TLS:** Caddy issues from its built-in local CA. Root cert installed into the system trust store via p11-kit's `trust anchor` (so `curl` and Chromium-family browsers trust it).
-- **PHP:** musl-static builds from [dl.static-php.dev](https://dl.static-php.dev/static-php-cli/bulk) — Laravel-ready extension set, no glibc dependency, plus routa's Laravel-friendly FPM ini defaults. Per-version socket via templated systemd unit `routa-php@<spec>.service`.
+- **PHP:** routa's own static-php-cli builds from the `php-builds` release — Laravel-ready extension set, able to load shared extensions, plus routa's Laravel-friendly FPM ini defaults. Older versions fall back to [dl.static-php.dev](https://dl.static-php.dev/static-php-cli/gnu-bulk). Per-version socket via templated systemd unit `routa-php@<spec>.service`.
 - **Optional services:** Redis, Mailpit, MariaDB, MySQL, Postgres, Meilisearch, Typesense, and MinIO run as systemd user services. MySQL uses routa-managed runtimes under `~/.local/share/routa/binaries/mysql/`; the remaining services currently use matching system binaries. Stateful services keep data under `~/.local/share/routa/services/`.
 - **Routing:** Caddy's `php_fastcgi` for PHP sites (Caddy default `try_files` handles Laravel routing). `file_server` for static.
 - **Process management:** systemd user units. routa itself is a stateless CLI — no daemon.

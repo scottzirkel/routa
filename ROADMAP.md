@@ -5,7 +5,22 @@ priority, not commitment.
 
 ## Pending release
 
-- None.
+- **routa's own PHP builds** — static-php.dev stopped publishing in July 2026,
+  so routa now builds PHP itself. The `php builds` workflow compiles the CLI,
+  PHP-FPM, Xdebug, and pcov with static-php-cli, checks php.net weekly, and
+  publishes to the `php-builds` release with a `SHA256SUMS` file.
+  `routa php install` prefers these builds, verifies each download's checksum,
+  and falls back to static-php.dev for versions only it has. The builds load
+  shared extensions in both the CLI and PHP-FPM, so Xdebug works for browser
+  requests, and they drop IMAP, which PHP removed in 8.4 and which breaks the
+  8.5.13 build. Xdebug comes from PECL's stable release rather than an alpha.
+  The old `php extension artifacts` workflow is gone.
+- **conf.d for your own extensions** — `.ini` files in
+  `~/.config/routa/php/<minor>/conf.d/` are added after routa's settings for
+  the CLI and PHP-FPM, so more than one extension can be loaded without editing
+  routa's per-version php.ini.
+- **PHP upgrades take effect** — `routa php install` restarts a running PHP-FPM
+  instance instead of leaving it on the binary the install replaced.
 
 ## Released
 
@@ -371,8 +386,9 @@ trying to become a full-stack desktop dev suite.
 ### P3 — extensibility and larger UX work
 
 - **PHP extension variants** — `routa php ext list <ver>` exists today for the
-  compiled-in upstream bulk profile. Add finer-grained variant selection or
-  custom static-php-cli builds for users who need a different extension set.
+  compiled-in extension set. Add finer-grained variant selection for users who
+  need a different set, or publish more shared extensions beside Xdebug and
+  pcov.
 - **Caddy admin API integration** — drive site changes via the admin API instead
   of file fragments plus reloads for faster, more atomic updates.
 - **Web dashboard** — add a small local web UI in addition to the TUI for users

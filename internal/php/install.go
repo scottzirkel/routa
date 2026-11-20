@@ -4,7 +4,9 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"debug/elf"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -24,8 +26,9 @@ func versionDir(version string) string { return filepath.Join(paths.PHPDir(), ve
 type Installed struct{ Version string }
 
 // DynamicCLIName is a CLI binary installed beside the stock one that links libc
-// dynamically. The upstream gnu-bulk builds link glibc statically, and Linux
-// cannot dlopen into such a binary, so they can never load a shared extension.
+// dynamically. It only matters for the older static-php.dev gnu-bulk builds,
+// which link glibc statically: Linux cannot dlopen into such a binary, so they
+// can never load a shared extension. routa's own builds are dynamic already.
 // Dropping php-dynamic in beside php restores pcov for the CLI without touching
 // the php-fpm binary serving sites — and Install leaves it alone, so it also
 // survives a reinstall.
@@ -222,16 +225,17 @@ func Install(ctx context.Context, r Release, out io.Writer) (err error) {
 	}
 
 	tasks := []struct {
-		label string
-		url   string
-		dest  string
+		label  string
+		url    string
+		sha256 string
+		dest   string
 	}{
-		{"php (cli)", r.CLIURL, filepath.Join(dir, "bin", "php")},
-		{"php-fpm  ", r.FPMURL, filepath.Join(dir, "bin", "php-fpm")},
+		{"php (cli)", r.CLIURL, r.CLISHA256, filepath.Join(dir, "bin", "php")},
+		{"php-fpm  ", r.FPMURL, r.FPMSHA256, filepath.Join(dir, "bin", "php-fpm")},
 	}
 	for _, t := range tasks {
 		fmt.Fprintf(out, "  ↓ %s %s\n", t.label, r.Version)
-		if err := downloadAndExtract(ctx, t.url, t.dest, out); err != nil {
+		if err := downloadAndExtract(ctx, t.url, t.sha256, t.dest, out); err != nil {
 			return fmt.Errorf("%s: %w", t.label, err)
 		}
 	}
@@ -257,8 +261,9 @@ func routaAssetArch() (string, error) {
 // downloadAndExtract writes to a temporary file beside destBin and renames it
 // into place only after a complete download. A failed download therefore
 // never touches an installed binary: replacing php-fpm with a partial file
-// would take every site on that version down with 502s.
-func downloadAndExtract(ctx context.Context, url, destBin string, out io.Writer) error {
+// would take every site on that version down with 502s. When wantSHA256 is
+// set, an archive that does not match it counts as a failed download too.
+func downloadAndExtract(ctx context.Context, url, wantSHA256, destBin string, out io.Writer) error {
 	if out == nil {
 		out = io.Discard
 	}
@@ -266,7 +271,7 @@ func downloadAndExtract(ctx context.Context, url, destBin string, out io.Writer)
 	defer os.Remove(tmp)
 	const attempts = 3
 	for attempt := 1; ; attempt++ {
-		err := downloadAndExtractOnce(ctx, url, tmp, out)
+		err := downloadAndExtractOnce(ctx, url, wantSHA256, tmp, out)
 		if err == nil {
 			return os.Rename(tmp, destBin)
 		}
@@ -289,6 +294,12 @@ func (e downloadStatusError) Error() string {
 }
 
 func retryableDownloadError(err error) bool {
+	// A complete archive with the wrong checksum would come back the same way;
+	// an interrupted one fails in gzip or tar before the sum is checked.
+	var mismatch checksumError
+	if errors.As(err, &mismatch) {
+		return false
+	}
 	var status downloadStatusError
 	if errors.As(err, &status) {
 		return status.Code == http.StatusRequestTimeout || status.Code == http.StatusTooManyRequests || status.Code >= 500
@@ -296,7 +307,16 @@ func retryableDownloadError(err error) bool {
 	return true
 }
 
-func downloadAndExtractOnce(ctx context.Context, url, destBin string, out io.Writer) error {
+type checksumError struct {
+	URL       string
+	Got, Want string
+}
+
+func (e checksumError) Error() string {
+	return fmt.Sprintf("download %s: SHA-256 is %s, expected %s", e.URL, e.Got, e.Want)
+}
+
+func downloadAndExtractOnce(ctx context.Context, url, wantSHA256, destBin string, out io.Writer) error {
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	client := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := client.Do(req)
@@ -308,7 +328,8 @@ func downloadAndExtractOnce(ctx context.Context, url, destBin string, out io.Wri
 		return downloadStatusError{URL: url, Code: resp.StatusCode}
 	}
 
-	pr := &progressReader{r: resp.Body, total: resp.ContentLength, out: out}
+	hash := sha256.New()
+	pr := &progressReader{r: io.TeeReader(resp.Body, hash), total: resp.ContentLength, out: out}
 	gzr, err := gzip.NewReader(pr)
 	if err != nil {
 		return err
@@ -335,9 +356,18 @@ func downloadAndExtractOnce(ctx context.Context, url, destBin string, out io.Wri
 		}
 		wrote = true
 	}
+	// The tar reader can stop before the end of the archive; hash all of it.
+	if _, err := io.Copy(io.Discard, pr); err != nil {
+		return err
+	}
 	fmt.Fprintln(out)
 	if !wrote {
 		return fmt.Errorf("no regular file inside tarball")
+	}
+	if wantSHA256 != "" {
+		if got := hex.EncodeToString(hash.Sum(nil)); got != wantSHA256 {
+			return checksumError{URL: url, Got: got, Want: wantSHA256}
+		}
 	}
 	return nil
 }

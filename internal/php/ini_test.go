@@ -597,3 +597,99 @@ func TestWriteCLIShimShadowsTheStockPHPOnPath(t *testing.T) {
 		t.Fatalf("shim target = %q (err %v), want the dynamic CLI %q", got, err, dynamic)
 	}
 }
+
+func writeConfD(t *testing.T, spec, name, content string) {
+	t.Helper()
+	dir := ConfDir(spec)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEffectiveINISettingsAddsConfDirFiles(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if err := SetINISetting("8.5", "memory_limit", "1G"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetINISetting("8.5", ExtensionKey, "/routa/8.5/extensions/pcov.so"); err != nil {
+		t.Fatal(err)
+	}
+	writeConfD(t, "8.5", "20-swoole.ini", "[swoole]\nextension = /opt/ext/two.so\nmemory_limit = 2G\n")
+	writeConfD(t, "8.5", "10-first.ini", "; mine\nextension = /opt/ext/one.so\nextension = /routa/8.5/extensions/pcov.so\n")
+	writeConfD(t, "8.5", "notes.txt", "extension = /opt/ext/ignored.so\n")
+
+	settings, err := EffectiveINISettings("8.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var extensions []string
+	values := map[string]string{}
+	for _, s := range settings {
+		if s.Key == ExtensionKey {
+			extensions = append(extensions, s.Value)
+		}
+		values[s.Key] = s.Value
+	}
+	want := []string{"/routa/8.5/extensions/pcov.so", "/opt/ext/one.so", "/opt/ext/two.so"}
+	if strings.Join(extensions, " ") != strings.Join(want, " ") {
+		t.Fatalf("extensions = %v, want %v", extensions, want)
+	}
+	if values["memory_limit"] != "2G" {
+		t.Fatalf("memory_limit = %q; conf.d should override the per-version php.ini", values["memory_limit"])
+	}
+}
+
+func TestConfDirIsSharedByEveryPatchOfAMinor(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	if ConfDir("8.5.13") != ConfDir("8.5") {
+		t.Fatalf("ConfDir(8.5.13) = %s, ConfDir(8.5) = %s", ConfDir("8.5.13"), ConfDir("8.5"))
+	}
+	writeConfD(t, "8.5", "ext.ini", "extension = /opt/ext/one.so\n")
+	settings, err := RenderedINISettings("8.5.13", SAPIFPM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, s := range settings {
+		found = found || (s.Key == ExtensionKey && s.Value == "/opt/ext/one.so")
+	}
+	if !found {
+		t.Fatalf("PHP 8.5.13 did not pick up the 8.5 conf.d file: %#v", settings)
+	}
+}
+
+func TestConfDirErrorNamesTheFile(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	writeConfD(t, "8.5", "broken.ini", "this is not a setting\n")
+	_, err := EffectiveINISettings("8.5")
+	if err == nil || !strings.Contains(err.Error(), "broken.ini") {
+		t.Fatalf("err = %v, want one naming broken.ini", err)
+	}
+}
+
+func TestXdebugStatusIgnoresOtherZendExtensions(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	if err := SetINISetting("8.5", ZendExtensionKey, XdebugExtension.Path("8.5")); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetINISetting("8.5", XdebugModeKey, "debug"); err != nil {
+		t.Fatal(err)
+	}
+	writeConfD(t, "8.5", "ioncube.ini", "zend_extension = /opt/ext/ioncube.so\n")
+
+	status, err := XdebugINIStatus("8.5", []string{"xdebug"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ZendExtension != XdebugExtension.Path("8.5") || !status.Enabled {
+		t.Fatalf("status = %#v; another zend_extension hid Xdebug", status)
+	}
+}

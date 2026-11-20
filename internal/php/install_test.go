@@ -5,6 +5,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -108,7 +111,7 @@ func TestDownloadAndExtractRetriesInterruptedBody(t *testing.T) {
 
 	dest := filepath.Join(t.TempDir(), "php")
 	var out bytes.Buffer
-	if err := downloadAndExtract(context.Background(), server.URL, dest, &out); err != nil {
+	if err := downloadAndExtract(context.Background(), server.URL, "", dest, &out); err != nil {
 		t.Fatal(err)
 	}
 	if attempts != 2 {
@@ -126,6 +129,42 @@ func TestDownloadAndExtractRetriesInterruptedBody(t *testing.T) {
 	}
 }
 
+func TestDownloadAndExtractVerifiesChecksum(t *testing.T) {
+	archive := testTarGz(t, "php binary")
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		_, _ = w.Write(archive)
+	}))
+	defer server.Close()
+	sum := sha256.Sum256(archive)
+	dest := filepath.Join(t.TempDir(), "php")
+
+	if err := downloadAndExtract(context.Background(), server.URL, hex.EncodeToString(sum[:]), dest, io.Discard); err != nil {
+		t.Fatalf("matching checksum rejected: %v", err)
+	}
+
+	if err := os.WriteFile(dest, []byte("installed"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	attempts = 0
+	err := downloadAndExtract(context.Background(), server.URL, strings.Repeat("0", 64), dest, io.Discard)
+	var mismatch checksumError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("err = %v, want a checksum mismatch", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d; a checksum mismatch should not be retried", attempts)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "installed" {
+		t.Fatalf("installed file replaced by an archive that failed its checksum: %q", data)
+	}
+}
+
 func TestDownloadAndExtractDoesNotRetryNotFound(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -134,7 +173,7 @@ func TestDownloadAndExtractDoesNotRetryNotFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	err := downloadAndExtract(context.Background(), server.URL, filepath.Join(t.TempDir(), "php"), io.Discard)
+	err := downloadAndExtract(context.Background(), server.URL, "", filepath.Join(t.TempDir(), "php"), io.Discard)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -213,7 +252,7 @@ func TestDownloadAndExtractKeepsInstalledFileWhenDownloadFails(t *testing.T) {
 	if err := os.WriteFile(dest, []byte("installed php"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := downloadAndExtract(context.Background(), server.URL, dest, io.Discard); err == nil {
+	if err := downloadAndExtract(context.Background(), server.URL, "", dest, io.Discard); err == nil {
 		t.Fatal("expected error")
 	}
 	data, err := os.ReadFile(dest)

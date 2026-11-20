@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/scottzirkel/routa/internal/paths"
@@ -99,8 +101,27 @@ func INIPath(spec string) string {
 	return filepath.Join(paths.PHPConfigDir(), spec, "php.ini")
 }
 
+// ConfDir is a folder of extra .ini files for one PHP minor version, such as a
+// file that loads an extension you built. It is per minor version because a
+// compiled extension works with every patch of the minor it was built for.
+func ConfDir(spec string) string {
+	minor := spec
+	if v, err := ParseVersion(spec); err == nil {
+		minor = v.MinorString()
+	}
+	return filepath.Join(paths.PHPConfigDir(), minor, "conf.d")
+}
+
+// EffectiveINISettings layers routa's Laravel defaults, the per-version
+// php.ini, and then every ConfDir file in name order. A later value replaces an
+// earlier one, except extension= and zend_extension= lines, which add up: the
+// per-version php.ini holds one of each, and ConfDir is where more go.
 func EffectiveINISettings(spec string) ([]INISetting, error) {
 	userSettings, err := LoadINISettings(spec)
+	if err != nil {
+		return nil, err
+	}
+	confSettings, err := LoadConfDirSettings(spec)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +138,52 @@ func EffectiveINISettings(spec string) ([]INISetting, error) {
 		}
 		index[setting.Key] = len(settings)
 		settings = append(settings, setting)
+	}
+	for _, setting := range confSettings {
+		if setting.Key == ExtensionKey || setting.Key == ZendExtensionKey {
+			if !slices.Contains(settings, setting) {
+				settings = append(settings, setting)
+			}
+			continue
+		}
+		if i, ok := index[setting.Key]; ok {
+			settings[i] = setting
+			continue
+		}
+		index[setting.Key] = len(settings)
+		settings = append(settings, setting)
+	}
+	return settings, nil
+}
+
+// LoadConfDirSettings reads every *.ini file in ConfDir(spec), in name order.
+// Section headers such as [xdebug] are skipped, since PHP ignores them for the
+// settings routa renders.
+func LoadConfDirSettings(spec string) ([]INISetting, error) {
+	dir := ConfDir(spec)
+	matches, err := filepath.Glob(filepath.Join(dir, "*.ini"))
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(matches)
+	var settings []INISetting
+	for _, path := range matches {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "[") {
+				continue
+			}
+			setting, ok, err := parseINISetting(line)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", path, err)
+			}
+			if ok {
+				settings = append(settings, setting)
+			}
+		}
 	}
 	return settings, nil
 }
@@ -330,7 +397,12 @@ func XdebugINIStatus(spec string, modules []string) (XdebugStatus, error) {
 	}
 	values := map[string]string{}
 	for _, setting := range settings {
-		values[strings.ToLower(setting.Key)] = setting.Value
+		key := strings.ToLower(setting.Key)
+		// Other zend_extension= lines (from ConfDir) must not hide Xdebug's.
+		if key == ZendExtensionKey && XdebugExtension.loadedBy(values[key]) {
+			continue
+		}
+		values[key] = setting.Value
 	}
 	status.Mode = values[XdebugModeKey]
 	status.StartWithRequest = values[XdebugStartWithRequestKey]

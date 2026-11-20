@@ -550,7 +550,7 @@ var phpINIEditCmd = &cobra.Command{
 
 var phpInstallCmd = &cobra.Command{
 	Use:   "install <version>",
-	Short: "Install a static PHP build (e.g. 8.3, or 8.3.27 for an exact patch)",
+	Short: "Install a PHP build (e.g. 8.5, or 8.5.13 for an exact patch)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		spec := args[0]
@@ -560,7 +560,7 @@ var phpInstallCmd = &cobra.Command{
 		}
 
 		fmt.Println("→ fetching release index")
-		rels, err := php.FetchReleases(ctx)
+		rels, err := php.FetchReleases(ctx, os.Stderr)
 		if err != nil {
 			return fmt.Errorf("fetch releases: %w", err)
 		}
@@ -568,7 +568,7 @@ var phpInstallCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Printf("→ resolved %s → %s\n", spec, rel.Version)
+		fmt.Printf("→ resolved %s → %s (%s build)\n", spec, rel.Version, rel.Source)
 
 		if err := php.Install(ctx, *rel, os.Stdout); err != nil {
 			return err
@@ -606,13 +606,6 @@ var phpInstallCmd = &cobra.Command{
 			return err
 		}
 
-		// Start the major.minor instance — that's what sites reference by default.
-		unit := fmt.Sprintf("routa-php@%s.service", rel.Version.MinorString())
-		if err := systemd.EnableNow(unit); err != nil {
-			return err
-		}
-		fmt.Printf("→ started %s\n", unit)
-
 		// First install also becomes the default; re-render fragments either way.
 		st, err := site.Load()
 		if err != nil {
@@ -632,6 +625,35 @@ var phpInstallCmd = &cobra.Command{
 		if err := site.WriteFragments(sites); err != nil {
 			return err
 		}
+
+		// Start the major.minor instance — that's what sites reference by default.
+		// enable --now leaves a running instance alone, and that instance would
+		// keep serving the binary this install just replaced, so restart it.
+		// This comes after RefreshFPMConfigsForSites on purpose: that reloads
+		// running instances with SIGUSR2, and a php-fpm only a moment old has no
+		// handler for it yet, so the signal would kill it.
+		unit := fmt.Sprintf("routa-php@%s.service", rel.Version.MinorString())
+		wasRunning := systemd.IsActive(unit)
+		if err := systemd.EnableNow(unit); err != nil {
+			return err
+		}
+		if wasRunning {
+			if err := systemd.RunSystemctl("--user", "restart", unit); err != nil {
+				return fmt.Errorf("restart %s: %w", unit, err)
+			}
+			fmt.Printf("→ restarted %s\n", unit)
+		} else {
+			fmt.Printf("→ started %s\n", unit)
+		}
+		// A site pinned to this exact patch runs its own instance; a reinstall
+		// replaced its binary too.
+		if exactUnit := fmt.Sprintf("routa-php@%s.service", rel.Version); systemd.IsActive(exactUnit) {
+			if err := systemd.RunSystemctl("--user", "restart", exactUnit); err != nil {
+				return fmt.Errorf("restart %s: %w", exactUnit, err)
+			}
+			fmt.Printf("→ restarted %s\n", exactUnit)
+		}
+
 		if err := reloadCaddyWithCurrentRootConfig(); err != nil {
 			fmt.Fprintf(os.Stderr, "  warning: caddy reload: %v\n", err)
 		}

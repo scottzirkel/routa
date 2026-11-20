@@ -1,0 +1,143 @@
+name: php builds
+
+# Builds routa's own Linux PHP (CLI, PHP-FPM, Xdebug, pcov) with static-php-cli
+# and publishes it to the php-builds release, which `routa php install` reads.
+# The weekly run asks php.net for the newest patch of each version in
+# SCHEDULED_VERSIONS and builds only the ones not published yet.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: Space-separated PHP versions; a minor version such as 8.5 means its newest patch
+        required: true
+        default: "8.5"
+      rebuild:
+        description: Build again even if the version is already published
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# Two runs publishing at once could each rewrite SHA256SUMS without the other's builds.
+concurrency:
+  group: php-builds
+  cancel-in-progress: false
+
+env:
+  BUILDS_TAG: php-builds
+  EXTENSIONS_TAG: php-extensions
+  # routa before v1.12 looks for Xdebug here; keep it in sync while it exists.
+  LEGACY_XDEBUG_TAG: php-xdebug
+  SCHEDULED_VERSIONS: "8.5"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.plan.outputs.versions }}
+    steps:
+      - name: Pick versions to build
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REQUESTED: ${{ inputs.versions || env.SCHEDULED_VERSIONS }}
+          REBUILD: ${{ inputs.rebuild || false }}
+        run: |
+          set -euo pipefail
+          gh release view "$BUILDS_TAG" >/dev/null 2>&1 ||
+            gh release create "$BUILDS_TAG" --title "PHP builds" \
+              --notes "routa's own Linux PHP builds, made with static-php-cli. \`routa php install\` reads SHA256SUMS from this release."
+          gh release view "$EXTENSIONS_TAG" >/dev/null 2>&1 ||
+            gh release create "$EXTENSIONS_TAG" --title "PHP shared extension artifacts" \
+              --notes "routa-managed Xdebug and pcov shared extensions for routa's PHP builds."
+          published="$(gh release view "$BUILDS_TAG" --json assets --jq '.assets[].name')"
+
+          build=()
+          for spec in $REQUESTED; do
+            version="$spec"
+            if [[ "$spec" =~ ^[0-9]+\.[0-9]+$ ]]; then
+              version="$(curl -fsSL "https://www.php.net/releases/index.php?json&version=$spec" | jq -r '.version // empty')"
+            fi
+            if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::php.net lists no release for PHP $spec"
+              exit 1
+            fi
+            if [[ "$REBUILD" != "true" ]] &&
+              grep -qx "php-$version-linux-x86_64.sha256" <<< "$published" &&
+              grep -qx "php-$version-linux-aarch64.sha256" <<< "$published"; then
+              echo "PHP $version is already published"
+              continue
+            fi
+            echo "PHP $version will be built"
+            build+=("$version")
+          done
+          echo "versions=$(printf '%s\n' "${build[@]}" | jq -Rnc '[inputs | select(length > 0)]')" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.versions != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.plan.outputs.versions) }}
+        target:
+          - { runner: ubuntu-latest, arch: x86_64, goarch: amd64 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64, goarch: arm64 }
+    name: PHP ${{ matrix.version }} ${{ matrix.target.arch }}
+    runs-on: ${{ matrix.target.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build PHP
+        env:
+          # static-php-cli fetches pre-built libraries through the GitHub API,
+          # which rate-limits anonymous calls.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./scripts/build-php-artifacts.sh "${{ matrix.version }}"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ matrix.version }}
+          ARCH: ${{ matrix.target.arch }}
+          GOARCH: ${{ matrix.target.goarch }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          exts=(dist/routa_php_*_"${VERSION}"_linux_"${GOARCH}".tar.gz)
+          if ((${#exts[@]})); then
+            gh release upload "$EXTENSIONS_TAG" "${exts[@]}" --clobber
+          fi
+          xdebug="dist/routa_php_xdebug_${VERSION}_linux_${GOARCH}.tar.gz"
+          if [[ -f "$xdebug" ]] && gh release view "$LEGACY_XDEBUG_TAG" >/dev/null 2>&1; then
+            gh release upload "$LEGACY_XDEBUG_TAG" "$xdebug" --clobber
+          fi
+          gh release upload "$BUILDS_TAG" \
+            "dist/php-${VERSION}-cli-linux-${ARCH}.tar.gz" \
+            "dist/php-${VERSION}-fpm-linux-${ARCH}.tar.gz" --clobber
+          # Upload the checksum file last: it is what marks this build as published.
+          gh release upload "$BUILDS_TAG" "dist/php-${VERSION}-linux-${ARCH}.sha256" --clobber
+
+  index:
+    needs: [plan, build]
+    # Index whatever did publish, even if one architecture failed.
+    if: always() && needs.plan.outputs.versions != '[]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rebuild SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir sums
+          cd sums
+          gh release download "$BUILDS_TAG" --pattern 'php-*-linux-*.sha256'
+          cat php-*-linux-*.sha256 | sort -k2 > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$BUILDS_TAG" SHA256SUMS --clobber

@@ -14,9 +14,9 @@ import (
 )
 
 // ManagedExtension is a shared extension routa builds and publishes itself.
-// The upstream gnu-bulk PHP builds ship neither Xdebug nor pcov — static-php-cli
-// can only compile either one as a shared object — so routa distributes a
-// matching .so per PHP version and loads it from the per-version php.ini.
+// static-php-cli can only compile Xdebug and pcov as shared objects, so no PHP
+// build has them compiled in. routa publishes a matching .so per PHP version
+// and loads it from the per-version php.ini.
 type ManagedExtension struct {
 	Name string
 	// Zend is true when php.ini must load the extension with zend_extension=
@@ -90,7 +90,7 @@ func InstallExtension(ctx context.Context, ext ManagedExtension, version string,
 	}
 
 	fmt.Fprintf(out, "  ↓ %-8s %s\n", ext.Name, exact)
-	if err := downloadAndExtract(ctx, url, dest, out); err != nil {
+	if err := downloadAndExtract(ctx, url, "", dest, out); err != nil {
 		var status downloadStatusError
 		if errors.As(err, &status) && status.Code == http.StatusNotFound {
 			return false, nil

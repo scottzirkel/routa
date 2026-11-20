@@ -50,12 +50,15 @@ Before `v1.0.0`, minor releases may still include breaking changes, but prefer c
 7. Create the GitHub release from the pushed tag. The release-artifacts workflow
    attaches Linux `amd64` and `arm64` archives plus a checksum file.
 
-8. When the supported upstream PHP patch versions change, run the
-   `php extension artifacts` workflow for those exact versions so
-   `routa php install <version>` can fetch matching managed Xdebug and pcov
-   shared extensions from the `php-extensions` release. The workflow also
-   mirrors the Xdebug archives to the older `php-xdebug` release, which routa
-   before v1.12 still resolves against.
+8. PHP builds publish themselves. The `php builds` workflow runs every Monday,
+   asks php.net for the newest patch of each version in its
+   `SCHEDULED_VERSIONS`, and builds any that are not in the `php-builds`
+   release yet. It uploads the CLI and PHP-FPM archives there and rebuilds that
+   release's `SHA256SUMS`, which is what `routa php install` reads. Xdebug and
+   pcov go to the `php-extensions` release, with Xdebug mirrored to the older
+   `php-xdebug` release for routa before v1.12. To support a new PHP minor
+   version, add it to `SCHEDULED_VERSIONS`. To build one now, run the workflow
+   by hand with that version.
 
 9. For AUR releases, update `packaging/aur/routa-bin/PKGBUILD` with the new
    `pkgver` and release checksums, regenerate `.SRCINFO`, then publish those
