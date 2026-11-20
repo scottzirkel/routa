@@ -427,10 +427,17 @@ func explicitOrCurrentPHPSpec(args []string) (string, error) {
 }
 
 var phpINIShowCmd = &cobra.Command{
-	Use:   "show [version]",
-	Short: "Show per-version PHP ini settings",
-	Args:  cobra.MaximumNArgs(1),
+	Use:     "show [version]",
+	Example: "  routa php ini show 8.5\n  routa php ini show --site affiliate",
+	Short:   "Show per-version PHP ini settings, or a site's with --site",
+	Args:    cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if phpINISite != "" {
+			if len(args) > 0 {
+				return fmt.Errorf("--site settings do not take a PHP version")
+			}
+			return showSiteINI(cmd.OutOrStdout(), phpINISite)
+		}
 		spec, err := explicitOrCurrentPHPSpec(args)
 		if err != nil {
 			return err
@@ -457,10 +464,17 @@ var phpINIShowCmd = &cobra.Command{
 }
 
 var phpINIPathCmd = &cobra.Command{
-	Use:   "path [version]",
-	Short: "Print the per-version PHP ini path",
-	Args:  cobra.MaximumNArgs(1),
+	Use:     "path [version]",
+	Example: "  routa php ini path 8.5\n  routa php ini path --site affiliate",
+	Short:   "Print the per-version PHP ini path, or a site's with --site",
+	Args:    cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if phpINISite != "" {
+			if len(args) > 0 {
+				return fmt.Errorf("--site settings do not take a PHP version")
+			}
+			return siteINIPath(cmd.OutOrStdout(), phpINISite)
+		}
 		spec, err := explicitOrCurrentPHPSpec(args)
 		if err != nil {
 			return err
@@ -474,10 +488,19 @@ var phpINIPathCmd = &cobra.Command{
 }
 
 var phpINISetCmd = &cobra.Command{
-	Use:   "set <version> <key> <value>",
-	Short: "Set a per-version PHP ini value",
-	Args:  cobra.MinimumNArgs(3),
+	Use:     "set <version> <key> <value>",
+	Example: "  routa php ini set 8.5 upload_max_filesize 128M\n  routa php ini set --site affiliate upload_max_filesize 200M",
+	Short:   "Set a per-version PHP ini value, or a site's with --site",
+	Args: func(cmd *cobra.Command, args []string) error {
+		if phpINISite != "" {
+			return cobra.MinimumNArgs(2)(cmd, args)
+		}
+		return cobra.MinimumNArgs(3)(cmd, args)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if phpINISite != "" {
+			return setSiteINI(cmd.OutOrStdout(), phpINISite, args[0], strings.Join(args[1:], " "))
+		}
 		spec := args[0]
 		if err := requirePHP(spec); err != nil {
 			return err
@@ -491,10 +514,19 @@ var phpINISetCmd = &cobra.Command{
 }
 
 var phpINIUnsetCmd = &cobra.Command{
-	Use:   "unset <version> <key>",
-	Short: "Remove a per-version PHP ini value",
-	Args:  cobra.ExactArgs(2),
+	Use:     "unset <version> <key>",
+	Example: "  routa php ini unset 8.5 upload_max_filesize\n  routa php ini unset --site affiliate upload_max_filesize",
+	Short:   "Remove a per-version PHP ini value, or a site's with --site",
+	Args: func(cmd *cobra.Command, args []string) error {
+		if phpINISite != "" {
+			return cobra.ExactArgs(1)(cmd, args)
+		}
+		return cobra.ExactArgs(2)(cmd, args)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if phpINISite != "" {
+			return unsetSiteINI(cmd.OutOrStdout(), phpINISite, args[0])
+		}
 		spec := args[0]
 		if err := requirePHP(spec); err != nil {
 			return err
@@ -508,10 +540,17 @@ var phpINIUnsetCmd = &cobra.Command{
 }
 
 var phpINIEditCmd = &cobra.Command{
-	Use:   "edit [version]",
-	Short: "Open the per-version PHP ini file in $EDITOR",
-	Args:  cobra.MaximumNArgs(1),
+	Use:     "edit [version]",
+	Example: "  routa php ini edit 8.5\n  routa php ini edit --site affiliate",
+	Short:   "Open the per-version PHP ini file in $EDITOR, or a site's with --site",
+	Args:    cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if phpINISite != "" {
+			if len(args) > 0 {
+				return fmt.Errorf("--site settings do not take a PHP version")
+			}
+			return editSiteINI(cmd.OutOrStdout(), phpINISite)
+		}
 		spec, err := explicitOrCurrentPHPSpec(args)
 		if err != nil {
 			return err
@@ -522,23 +561,7 @@ var phpINIEditCmd = &cobra.Command{
 		if err := php.EnsureINIFile(spec); err != nil {
 			return err
 		}
-		editor := os.Getenv("VISUAL")
-		if editor == "" {
-			editor = os.Getenv("EDITOR")
-		}
-		if editor == "" {
-			editor = "vi"
-		}
-		parts := strings.Fields(editor)
-		if len(parts) == 0 {
-			return fmt.Errorf("empty editor command")
-		}
-		editArgs := append(parts[1:], php.INIPath(spec))
-		c := exec.Command(parts[0], editArgs...)
-		c.Stdin = os.Stdin
-		c.Stdout = os.Stdout
-		c.Stderr = os.Stderr
-		if err := c.Run(); err != nil {
+		if err := runEditor(php.INIPath(spec)); err != nil {
 			return err
 		}
 		if _, err := php.LoadINISettings(spec); err != nil {
@@ -582,6 +605,12 @@ var phpInstallCmd = &cobra.Command{
 				fmt.Printf("→ %s extension not published for %s; install continues\n", ext.Name, rel.Version)
 			}
 		}
+
+		// A new minor version starts with no settings; carry over the newest
+		// older version's, so upgrading 8.5 → 8.6 keeps upload limits and the
+		// like. This runs before the Xdebug and pcov defaults below, which then
+		// write this version's own extension lines.
+		carryPHPSettingsForward(rel.Version.MinorString())
 
 		// Write fpm config for both forms so either unit instance works.
 		for _, s := range []string{rel.Version.String(), rel.Version.MinorString()} {
@@ -659,6 +688,33 @@ var phpInstallCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+// carryPHPSettingsForward copies the newest older minor version's settings to
+// minor when minor has none of its own. Failing to carry them over must not
+// fail the install, so problems are only warnings.
+func carryPHPSettingsForward(minor string) {
+	has, err := php.HasUserSettings(minor)
+	if err != nil || has {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  warning: checking PHP %s settings: %v\n", minor, err)
+		}
+		return
+	}
+	from, err := php.PreviousMinorWithSettings(minor)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: finding settings to carry over: %v\n", err)
+		return
+	}
+	if from == "" {
+		return
+	}
+	report, err := php.CopySettings(from, minor)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: carrying PHP %s settings over to %s: %v\n", from, minor, err)
+		return
+	}
+	printCopyReport(os.Stdout, from, minor, report)
 }
 
 var phpListCmd = &cobra.Command{
@@ -1078,8 +1134,11 @@ func init() {
 	phpXdebugOnCmd.Flags().StringVar(&phpXdebugClientPort, "client-port", defaultXdebug.ClientPort, "Xdebug client port")
 	phpPcovCmd.AddCommand(phpPcovInstallCmd, phpPcovOnCmd, phpPcovOffCmd, phpPcovStatusCmd)
 	phpPcovOnCmd.Flags().BoolVar(&phpPcovIncludeFPM, "fpm", false, "Also enable pcov for PHP-FPM (off by default; coverage is a CLI concern)")
-	phpINICmd.AddCommand(phpINIShowCmd, phpINIPathCmd, phpINISetCmd, phpINIUnsetCmd, phpINIEditCmd)
+	phpINICmd.AddCommand(phpINIShowCmd, phpINIPathCmd, phpINISetCmd, phpINIUnsetCmd, phpINIEditCmd, phpINICopyCmd)
 	phpINISetCmd.Flags().SetInterspersed(false)
+	for _, c := range []*cobra.Command{phpINIShowCmd, phpINIPathCmd, phpINISetCmd, phpINIUnsetCmd, phpINIEditCmd} {
+		c.Flags().StringVar(&phpINISite, "site", "", phpINISiteUsage)
+	}
 	phpCmd.AddCommand(phpInstallCmd, phpListCmd, phpUseCmd, phpRmCmd)
 	phpCmd.AddCommand(phpExtCmd)
 	phpCmd.AddCommand(phpINICmd)

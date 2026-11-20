@@ -187,6 +187,44 @@ routa php ini unset 8.4 memory_limit
 version is provided. `set` and `unset` keep the version explicit so key/value
 arguments stay unambiguous.
 
+### Per-site settings
+
+Add `--site <name>` to change a setting for one project's web requests only:
+
+```bash
+routa php ini set --site affiliate upload_max_filesize 200M
+routa php ini show --site affiliate
+routa php ini unset --site affiliate upload_max_filesize
+routa php ini edit --site affiliate
+```
+
+The setting belongs to the project folder, not the one name. Every site
+served from that folder gets it, such as `affiliate.test` and
+`api.affiliate.test`, and so do its workspaces. A workspace can also have
+settings of its own, which win over its parent's. The settings go into each
+site's PHP-FPM pool on top of the PHP version's, and they stay when the site
+moves to another PHP version. They apply to web requests only; `routa php`
+uses the PHP version's settings. Extensions are per PHP version, so load
+those through [conf.d](#adding-your-own-extensions-and-settings).
+
+### Upgrading to a new PHP version
+
+Settings belong to a PHP version, so 8.6 does not see 8.5's. The first
+`routa php install` of a new minor version copies the settings and conf.d
+files of the newest older version that has any, and prints what it copied.
+Patch upgrades, such as 8.5.8 to 8.5.13, keep everything as it is.
+
+Extension lines come across commented out. A compiled extension only loads in
+the PHP version it was built for, so point them at a build for the new
+version, then uncomment them.
+
+To copy settings by hand, for example to a version that was installed before
+you moved to it:
+
+```bash
+routa php ini copy 8.5 8.6
+```
+
 ## Per-site environment
 
 For PHP sites, routa keeps each site on its own PHP-FPM socket:

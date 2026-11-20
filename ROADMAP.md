@@ -21,6 +21,14 @@ priority, not commitment.
   routa's per-version php.ini.
 - **PHP upgrades take effect** — `routa php install` restarts a running PHP-FPM
   instance instead of leaving it on the binary the install replaced.
+- **Settings survive a new PHP version** — the first install of a new minor
+  version copies the newest older version's settings and conf.d files, with
+  extension lines turned off until they are rebuilt for it.
+  `routa php ini copy <from> <to>` does the same by hand.
+- **Per-site PHP settings** — `routa php ini set --site <name> <key> <value>`
+  sets a value for web requests to one project. It reaches every site served
+  from that folder and its workspaces, and moves with them between PHP
+  versions.
 
 ## Released
 

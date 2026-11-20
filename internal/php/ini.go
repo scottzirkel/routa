@@ -472,7 +472,11 @@ func writeINISettingsFile(path string, settings []INISetting) error {
 }
 
 func LoadINISettings(spec string) ([]INISetting, error) {
-	lines, err := readINILines(spec)
+	return loadINISettingsAt(INIPath(spec))
+}
+
+func loadINISettingsAt(path string) ([]INISetting, error) {
+	lines, err := readINIFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -490,21 +494,33 @@ func LoadINISettings(spec string) ([]INISetting, error) {
 }
 
 func SetINISetting(spec, key, value string) error {
+	return setINISettingAt(INIPath(spec), key, value)
+}
+
+func setINISettingAt(path, key, value string) error {
 	if err := validateINISetting(key, value); err != nil {
 		return err
 	}
-	lines, err := readINILines(spec)
+	lines, err := readINIFile(path)
 	if err != nil {
 		return err
 	}
+	out, err := setINILine(lines, key, value)
+	if err != nil {
+		return err
+	}
+	return writeINIFile(path, out)
+}
 
+// setINILine replaces key's line in lines, or appends one.
+func setINILine(lines []string, key, value string) ([]string, error) {
 	next := fmt.Sprintf("%s = %s", key, value)
 	updated := false
 	var out []string
 	for _, line := range lines {
 		setting, ok, err := parseINISetting(line)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if ok && setting.Key == key {
 			if !updated {
@@ -518,14 +534,18 @@ func SetINISetting(spec, key, value string) error {
 	if !updated {
 		out = append(out, next)
 	}
-	return writeINILines(spec, out)
+	return out, nil
 }
 
 func UnsetINISetting(spec, key string) error {
+	return unsetINISettingAt(INIPath(spec), key)
+}
+
+func unsetINISettingAt(path, key string) error {
 	if err := validateINIKey(key); err != nil {
 		return err
 	}
-	lines, err := readINILines(spec)
+	lines, err := readINIFile(path)
 	if err != nil {
 		return err
 	}
@@ -541,7 +561,7 @@ func UnsetINISetting(spec, key string) error {
 		}
 		out = append(out, line)
 	}
-	return writeINILines(spec, out)
+	return writeINIFile(path, out)
 }
 
 func EnsureINIFile(spec string) error {
@@ -578,7 +598,10 @@ func validateINIKey(key string) error {
 }
 
 func readINILines(spec string) ([]string, error) {
-	path := INIPath(spec)
+	return readINIFile(INIPath(spec))
+}
+
+func readINIFile(path string) ([]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -600,7 +623,10 @@ func readINILines(spec string) ([]string, error) {
 }
 
 func writeINILines(spec string, lines []string) error {
-	path := INIPath(spec)
+	return writeINIFile(INIPath(spec), lines)
+}
+
+func writeINIFile(path string, lines []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

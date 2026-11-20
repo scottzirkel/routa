@@ -43,7 +43,7 @@ pm.max_requests = 500
 clear_env = no
 catch_workers_output = yes
 decorate_workers_output = no
-{{range $.PoolINISettings}}php_admin_value[{{.Key}}] = {{.Value}}
+{{range .Settings}}php_admin_value[{{.Key}}] = {{.Value}}
 {{end}}
 {{end}}
 `
@@ -77,6 +77,9 @@ type fpmTmplData struct {
 type SitePool struct {
 	PoolName   string
 	SocketPath string
+	// Settings is the PHP version's pool settings with the site's per-project
+	// settings layered on top.
+	Settings []INISetting
 }
 
 type unitTmplData struct {
@@ -99,7 +102,8 @@ func WriteFPMConfig(spec string) error {
 	if err := writeINISettingsFile(iniPath, settings); err != nil {
 		return err
 	}
-	sitePools, err := sitePoolsForSpec(spec)
+	poolSettings := poolINISettings(settings)
+	sitePools, err := sitePoolsForSpec(spec, poolSettings)
 	if err != nil {
 		return err
 	}
@@ -114,7 +118,7 @@ func WriteFPMConfig(spec string) error {
 		RunDir:          paths.RunDir(),
 		LogDir:          paths.LogDir(),
 		Spec:            spec,
-		PoolINISettings: poolINISettings(settings),
+		PoolINISettings: poolSettings,
 		SitePools:       sitePools,
 	})
 }
@@ -154,19 +158,25 @@ func RefreshFPMConfigsForSites(sites []site.Resolved) error {
 	return nil
 }
 
-func sitePoolsForSpec(spec string) ([]SitePool, error) {
+func sitePoolsForSpec(spec string, base []INISetting) ([]SitePool, error) {
 	st, err := site.Load()
 	if err != nil {
 		return nil, err
 	}
+	sites := st.Resolve()
 	var pools []SitePool
-	for _, resolved := range st.Resolve() {
+	for _, resolved := range sites {
 		if resolved.Kind != site.KindPHP || resolved.PHP != spec {
 			continue
+		}
+		own, err := siteINISettings(resolved, sites)
+		if err != nil {
+			return nil, err
 		}
 		pools = append(pools, SitePool{
 			PoolName:   "routa-" + resolved.Name,
 			SocketPath: site.FPMSocketPath(resolved),
+			Settings:   overlayINISettings(base, own),
 		})
 	}
 	sort.Slice(pools, func(i, j int) bool { return pools[i].PoolName < pools[j].PoolName })
