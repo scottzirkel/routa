@@ -365,10 +365,10 @@ trying to become a full-stack desktop dev suite.
 
 ### P1 — Herd 2 parity
 
-- **Request profiler** — Herd 2 made its PHP profiler free. Blocked for routa:
-  the static `php-fpm` builds cannot load shared extensions ("Dynamic loading
-  not supported"), so a profiler, and Xdebug for browser requests, first need
-  a dynamically linked `php-fpm`.
+- **Request profiler** — Herd 2 made its PHP profiler free. No longer blocked:
+  routa's own PHP builds (8.5.13 and later) load shared extensions in
+  `php-fpm`, so a profiler extension can be published beside Xdebug and pcov.
+  Versions still on the static-php.dev builds cannot load one.
 - **Dev server on first request** — Herd starts a site's dev server when the
   site is opened and holds the first request until Vite is ready. routa has
   no long-lived daemon, so this would need systemd socket activation or
@@ -376,6 +376,26 @@ trying to become a full-stack desktop dev suite.
 
 ### P2 — local workflow polish
 
+- **PHP 8.6 builds** — PHP 8.6.0 came out on 19 November 2026, but the
+  `php builds` workflow only builds 8.5. When it is time to move:
+  1. In `scripts/build-php-artifacts.sh`, pass `--enable-pic` instead of
+     `--with-pic` for 8.6 and later. PHP 8.6's configure uses libtool 2.5,
+     which rejects `--with-pic`, and static-php-cli 2.8.5 passes it by
+     default. NativePHP's `php-bin` overrides `SPC_CMD_PREFIX_PHP_CONFIGURE`
+     for this; check that `bin/spc-gnu-docker` passes that variable into its
+     container.
+  2. Check that Xdebug's stable release supports 8.6. In November 2026 it was
+     3.5.3, and 3.6 was still an alpha. Without support, the build ships PHP
+     and pcov and leaves Xdebug out. pcov may lag a new PHP version too.
+  3. Watch for stray folders in the php.net source package, like the empty
+     `ext/imap` in 8.5.13 that made static-php-cli skip an extension.
+  4. Test with `scripts/build-php-artifacts.sh 8.6`, then add `8.6` to
+     `SCHEDULED_VERSIONS` in `.github/workflows/php-builds.yml` and run the
+     workflow by hand.
+  5. `routa php install 8.6` copies 8.5's settings and conf.d files, with
+     extension lines turned off. Rebuild any custom extensions for 8.6, try
+     one site with `routa isolate <site> 8.6`, then switch the default with
+     `routa php use 8.6`.
 - **FrankenPHP runtime option** — investigate FrankenPHP as a viable alternative
   or optional runtime alongside PHP-FPM. Evaluate compatibility with Routa's
   Caddy-based routing, per-site PHP versions, `.routa-env.php` server-variable
