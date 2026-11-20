@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-version="${1:-$(git describe --tags --exact-match 2>/dev/null || git describe --tags --always)}"
+version="${1:-$(git describe --tags --match 'v[0-9]*' --exact-match 2>/dev/null || git describe --tags --match 'v[0-9]*' --always)}"
 version="${version#v}"
 commit="$(git rev-parse --short HEAD)"
 build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
