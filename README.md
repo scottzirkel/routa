@@ -671,6 +671,16 @@ unless you pass `--drop-database`; routa never drops the parent's, or one that
 another worktree or routa site still names in its `.env`. A SQLite file goes
 with the worktree.
 
+`--drop-database` also empties the workspace's own Redis databases: the
+`REDIS_DB`, `REDIS_CACHE_DB` and other `REDIS_*_DB` numbers its `.env` and
+`.env.testing` set, so the next workspace given those numbers starts empty.
+routa keeps a number that the main checkout, another worktree or a routa site
+also sets, Laravel's defaults 0 and 1, and any value that is not a plain number.
+It never empties a Redis on another machine, on the standard port, or set with
+`REDIS_URL`. Each one emptied prints a line such as
+`→ cleared Redis database 37 on 127.0.0.1:6380`, and each one kept says why.
+Without `--drop-database`, `rm` lists the numbers it left alone.
+
 After removing the worktree, `rm` drops the test databases that removed
 worktrees left behind, including this one's. `routa workspace prune` does the
 same on demand, for worktrees removed another way, such as with
@@ -777,7 +787,8 @@ system service or someone else. Workspaces never change data there:
 - `workspace add` refuses when the app's database is on a standard port,
   since it cannot copy the database without writing to that server and
   workspaces never share it. Move the app to a routa database first.
-- `rm --drop-database` and test cleanup never drop anything there.
+- `rm --drop-database` and test cleanup never drop anything there, and `rm`
+  never empties a Redis database there.
 - A Redis on its standard port gets no workspace numbers, since routa cannot
   see which databases other apps use; the workspace keeps the parent's.
 

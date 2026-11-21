@@ -150,6 +150,18 @@ func freeRedisDatabases(used map[int]bool, n, databases int) ([]int, error) {
 // .env.testing of each checkout. Laravel's defaults always count as used.
 func UsedRedisDatabases(checkouts []string) map[int]bool {
 	used := map[int]bool{0: true, 1: true}
+	for n := range RedisDatabaseOwners(checkouts) {
+		used[n] = true
+	}
+	return used
+}
+
+// RedisDatabaseOwners maps each Redis database number set in the .env and
+// .env.testing of the checkouts to the first checkout that sets it.
+// Laravel's defaults, which a checkout uses without setting them, are not
+// included; UsedRedisDatabases adds them.
+func RedisDatabaseOwners(checkouts []string) map[int]string {
+	owners := map[int]string{}
 	for _, dir := range checkouts {
 		for _, name := range []string{".env", ".env.testing"} {
 			data, err := os.ReadFile(filepath.Join(dir, name))
@@ -158,13 +170,19 @@ func UsedRedisDatabases(checkouts []string) map[int]bool {
 			}
 			for key, value := range ParseEnv(string(data)) {
 				if n, err := strconv.Atoi(value); err == nil && redisDBKey.MatchString(key) {
-					used[n] = true
+					if _, seen := owners[n]; !seen {
+						owners[n] = dir
+					}
 				}
 			}
 		}
 	}
-	return used
+	return owners
 }
+
+// IsRedisDatabaseKey reports whether a .env key picks a Redis database
+// number, such as REDIS_DB or REDIS_CACHE_DB.
+func IsRedisDatabaseKey(key string) bool { return redisDBKey.MatchString(key) }
 
 func plainDatabaseName(v string) bool {
 	return v != "" && v != ":memory:" && !strings.ContainsAny(v, "/\\$") && !strings.HasSuffix(v, ".sqlite")

@@ -2,11 +2,14 @@ package cmd
 
 import (
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -108,7 +111,13 @@ ignored files such as vendor/ do not count. The branch is kept.
 
 The workspace's database is kept unless --drop-database is passed. routa only
 ever drops a database on the parent's server that differs from the parent's
-own; a SQLite file goes with the worktree.`,
+own; a SQLite file goes with the worktree.
+
+--drop-database also empties the Redis databases that the worktree's .env and
+.env.testing set for themselves (REDIS_DB, REDIS_CACHE_DB, and any other
+REDIS_*_DB). A number the main checkout, another worktree, or a routa site also
+sets is kept, as are Laravel's defaults (0 and 1), any Redis on another machine
+or on Redis's standard port, and any value that is not a plain number.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runWorkspaceRm,
 }
@@ -151,7 +160,7 @@ func init() {
 	workspaceAddCmd.Flags().StringSliceVar(&workspaceCopy, "copy", nil, "also copy this ignored path from the parent (repeatable)")
 	workspaceListCmd.Flags().BoolVar(&workspaceListJSON, "json", false, "emit machine-readable JSON")
 	workspaceRmCmd.Flags().BoolVar(&workspaceForce, "force", false, "remove even with uncommitted changes or untracked files")
-	workspaceRmCmd.Flags().BoolVar(&workspaceDropDB, "drop-database", false, "drop the workspace's own database")
+	workspaceRmCmd.Flags().BoolVar(&workspaceDropDB, "drop-database", false, "drop the workspace's own database and empty its own Redis databases")
 	workspaceCmd.AddCommand(workspaceAddCmd, workspaceListCmd, workspaceRmCmd, workspacePruneCmd)
 	rootCmd.AddCommand(workspaceCmd)
 }
@@ -783,6 +792,7 @@ func runWorkspaceRm(_ *cobra.Command, args []string) error {
 
 	// Read the workspace's databases before git deletes its .env files.
 	drop := workspaceServerDatabase(main, target.Path)
+	redis := workspaceRedisDatabases(main, target.Path)
 
 	if err := workspace.RemoveWorktree(main, target.Path, workspaceForce); err != nil {
 		return err
@@ -808,6 +818,7 @@ func runWorkspaceRm(_ *cobra.Command, args []string) error {
 		}
 		fmt.Printf("→ dropped database %s\n", drop.name)
 	}
+	clearWorkspaceRedis(os.Stdout, os.Stderr, redis, workspaceDropDB)
 	if err := pruneStaleTestDatabases(main, false); err != nil {
 		fmt.Fprintf(os.Stderr, "  warning: test database cleanup: %v\n", err)
 	}
@@ -846,6 +857,166 @@ func workspaceServerDatabase(main, wtPath string) serverDatabase {
 		}
 	}
 	return drop
+}
+
+// flushRedis empties one Redis database. Tests replace it.
+var flushRedis = services.FlushRedisDatabase
+
+// redisDatabase is one Redis database a removed workspace had to itself.
+type redisDatabase struct {
+	addr               string // host:port
+	username, password string // from the workspace's env file; never printed
+	number             int
+}
+
+// workspaceRedis is what rm does with a workspace's Redis databases: the
+// ones to empty, and why each other one is kept.
+type workspaceRedis struct {
+	clear []redisDatabase
+	kept  []string
+}
+
+// workspaceRedisDatabases finds the Redis databases the workspace's .env and
+// .env.testing set for themselves. It uses the same record of numbers in use
+// that 'workspace add' picks free ones from, so a number the main checkout,
+// another worktree or a routa site sets, or Laravel's default 0 or 1, is
+// never returned to clear. Neither is a database on another machine, on
+// Redis's standard port, or behind REDIS_URL, or a value that is not a plain
+// number.
+func workspaceRedisDatabases(main, wtPath string) workspaceRedis {
+	checkouts := append([]string{main}, otherCheckouts(main, wtPath)...)
+	used := workspace.UsedRedisDatabases(checkouts)
+	owners := workspace.RedisDatabaseOwners(checkouts)
+	var out workspaceRedis
+	seen := map[string]bool{}
+	for _, file := range []string{".env", ".env.testing"} {
+		data, err := os.ReadFile(filepath.Join(wtPath, file))
+		if err != nil {
+			continue
+		}
+		env := workspace.ParseEnv(string(data))
+		var keys []string
+		for key, value := range env {
+			if workspace.IsRedisDatabaseKey(key) && value != "" {
+				keys = append(keys, key)
+			}
+		}
+		if len(keys) == 0 {
+			continue
+		}
+		sort.Strings(keys)
+		var numbers []int
+		for _, key := range keys {
+			n, err := strconv.Atoi(env[key])
+			if err != nil || n < 0 {
+				out.kept = append(out.kept, fmt.Sprintf("the Redis database %s names in %s: its value is not a plain number", key, file))
+				continue
+			}
+			if !slices.Contains(numbers, n) {
+				numbers = append(numbers, n)
+			}
+		}
+		if len(numbers) == 0 {
+			continue
+		}
+		sort.Ints(numbers)
+		host, port := envSetting(env, "REDIS_HOST", "127.0.0.1"), envSetting(env, "REDIS_PORT", services.RedisDefaultPort)
+		why := ""
+		switch {
+		case envSetting(env, "REDIS_URL", "") != "":
+			why = "it sets REDIS_URL, which routa does not read"
+		case !loopbackHost(host):
+			why = "its REDIS_HOST is not this machine"
+		case services.ValidateRedisPort(port) != nil:
+			why = "its REDIS_PORT is not a port number"
+		case services.StandardPortOwner(port) != "":
+			why = fmt.Sprintf("port %s is the standard port for %s, and routa never clears data there", port, services.StandardPortOwner(port))
+		}
+		if why != "" {
+			out.kept = append(out.kept, fmt.Sprintf("Redis %s in %s: %s", redisNumbers(numbers), file, why))
+			continue
+		}
+		addr := net.JoinHostPort(strings.Trim(host, "[]"), port)
+		for _, n := range numbers {
+			id := addr + "/" + strconv.Itoa(n)
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			if used[n] {
+				if owner := owners[n]; owner != "" {
+					out.kept = append(out.kept, fmt.Sprintf("Redis database %d: %s uses it too", n, owner))
+				} else {
+					out.kept = append(out.kept, fmt.Sprintf("Redis database %d: it is Laravel's default, which any checkout without its own setting uses", n))
+				}
+				continue
+			}
+			out.clear = append(out.clear, redisDatabase{
+				addr:     addr,
+				username: envSetting(env, "REDIS_USERNAME", ""),
+				password: envSetting(env, "REDIS_PASSWORD", ""),
+				number:   n,
+			})
+		}
+	}
+	return out
+}
+
+// clearWorkspaceRedis reports the kept databases and, when drop is set,
+// empties the rest. A database that cannot be emptied is a warning, since
+// the worktree is already gone by then.
+func clearWorkspaceRedis(stdout, stderr io.Writer, plan workspaceRedis, drop bool) {
+	for _, line := range plan.kept {
+		fmt.Fprintf(stdout, "→ kept %s\n", line)
+	}
+	if len(plan.clear) == 0 {
+		return
+	}
+	if !drop {
+		numbers := make([]int, 0, len(plan.clear))
+		for _, db := range plan.clear {
+			numbers = append(numbers, db.number)
+		}
+		fmt.Fprintf(stdout, "→ kept Redis %s; pass --drop-database to empty them with the workspace\n", redisNumbers(numbers))
+		return
+	}
+	for _, db := range plan.clear {
+		if err := flushRedis(db.addr, db.username, db.password, db.number); err != nil {
+			fmt.Fprintf(stderr, "  warning: could not empty Redis database %d on %s: %v\n", db.number, db.addr, err)
+			continue
+		}
+		fmt.Fprintf(stdout, "→ cleared Redis database %d on %s\n", db.number, db.addr)
+	}
+}
+
+// envSetting reads a .env value, treating Laravel's "null" as unset.
+func envSetting(env map[string]string, key, fallback string) string {
+	v := strings.TrimSpace(env[key])
+	if v == "" || strings.EqualFold(v, "null") {
+		return fallback
+	}
+	return v
+}
+
+func loopbackHost(host string) bool {
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// redisNumbers reads "database 5" or "databases 5, 6".
+func redisNumbers(numbers []int) string {
+	parts := make([]string, len(numbers))
+	for i, n := range numbers {
+		parts[i] = strconv.Itoa(n)
+	}
+	if len(parts) == 1 {
+		return "database " + parts[0]
+	}
+	return "databases " + strings.Join(parts, ", ")
 }
 
 // otherCheckouts lists the folders, besides main and exclude, whose .env

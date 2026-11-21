@@ -118,3 +118,18 @@ func TestSharedRedisDatabases(t *testing.T) {
 		t.Fatalf("an app without Redis reported sharing: %#v", got)
 	}
 }
+
+func TestRedisDatabaseOwnersNamesTheFirstCheckout(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(a, ".env"), []byte("REDIS_DB=32\nREDIS_CACHE_DB=33\nREDIS_PREFIX=x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(b, ".env.testing"), []byte("REDIS_DB=33\nREDIS_QUEUE_DB=40\nREDIS_DB_X=7\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := RedisDatabaseOwners([]string{a, b})
+	want := map[int]string{32: a, 33: a, 40: b}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("owners = %#v, want %#v", got, want)
+	}
+}

@@ -109,4 +109,4 @@ The initial release line was reconstructed from the first commits:
 
 ### Next
 
-- None.
+- `routa workspace rm --drop-database` also empties the worktree's own Redis databases (its `.env` and `.env.testing` `REDIS_*_DB` numbers), keeping any number another checkout or site sets, Laravel's defaults, and any Redis on another machine or the standard port.
