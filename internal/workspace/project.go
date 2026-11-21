@@ -28,7 +28,21 @@ type Settings struct {
 	Run []string `json:"run,omitempty"`
 	// Actions are commands that keep running for the workspace, by name.
 	Actions map[string]string `json:"actions,omitempty"`
+	// TestDatabases is "own" (the default), where each workspace's
+	// .env.testing names test databases of its own, or "shared", where every
+	// workspace's tests use the parent's test databases.
+	TestDatabases string `json:"testDatabases,omitempty"`
 }
+
+// Test database modes for Settings.TestDatabases.
+const (
+	TestDatabasesOwn    = "own"
+	TestDatabasesShared = "shared"
+)
+
+// SharesTestDatabases reports whether the site's workspaces run their tests
+// against the parent's test databases.
+func (s Settings) SharesTestDatabases() bool { return s.TestDatabases == TestDatabasesShared }
 
 // LoadProject reads ProjectFile in dir. A missing file is an empty project.
 // Unknown keys are refused, so a typo cannot silently drop a setting.
@@ -54,6 +68,11 @@ func LoadProject(dir string) (Project, error) {
 }
 
 func (s Settings) validate() error {
+	switch s.TestDatabases {
+	case "", TestDatabasesOwn, TestDatabasesShared:
+	default:
+		return fmt.Errorf("workspace.testDatabases is %q; use %q or %q", s.TestDatabases, TestDatabasesOwn, TestDatabasesShared)
+	}
 	for _, svc := range s.Services {
 		if strings.TrimSpace(svc) == "" {
 			return fmt.Errorf("workspace.services has an empty entry")

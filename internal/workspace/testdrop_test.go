@@ -114,3 +114,18 @@ func TestStaleTestDatabasesWithOverlappingTemplates(t *testing.T) {
 		t.Fatalf("stale = %#v", got)
 	}
 }
+
+func TestStaleTestDatabasesNeverPicksSharedTestDatabases(t *testing.T) {
+	// With "testDatabases": "shared", every worktree's .env.testing names the
+	// parent's test databases, and the test runner makes _test_N copies.
+	existing := []string{
+		"testing", "testing_test_1", "testing_test_12",
+		"affiliate_testing", "affiliate_testing_test_3",
+		"testing_gone", "testing_gone_test_1", // from a worktree made before the switch
+	}
+	shared := map[string]bool{"testing": true, "affiliate_testing": true}
+	got := StaleTestDatabases(existing, []string{"affiliate_testing", "testing"}, nil, shared)
+	if want := []string{"testing_gone", "testing_gone_test_1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("stale = %#v, want only %#v", got, want)
+	}
+}

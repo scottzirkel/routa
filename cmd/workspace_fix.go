@@ -30,8 +30,13 @@ what 'routa workspace add' sets up. It only changes what is wrong:
 - A dev database shared with another checkout, or missing on its server,
   is replaced with the worktree's own copy (--database clone or empty).
 - Test database names shared with another checkout get the worktree's name.
-  Names that are already the worktree's own are kept.
-- Redis database numbers another checkout uses are replaced with free ones.
+  Names that are already the worktree's own are kept. A site whose
+  ` + workspace.ProjectFile + ` sets "testDatabases": "shared" keeps them as
+  they are.
+- Redis keys shared with another checkout get their own space. A Laravel app
+  gets key prefixes of its own (REDIS_PREFIX, HORIZON_PREFIX when it uses
+  Horizon, and any other REDIS_*_PREFIX) and keeps the parent's database
+  numbers. Any other app gets free database numbers instead.
 
 Run with --dry-run first to see the plan.`,
 	Args: cobra.ExactArgs(1),
@@ -76,6 +81,10 @@ func runWorkspaceFix(_ *cobra.Command, args []string) error {
 	newSite := site.WorktreeSiteName(parent, main, wtPath)
 	if sites := sitesAtPath(st, wtPath); len(sites) > 0 {
 		newSite = sites[0].Name
+	}
+	project, err := workspace.LoadProject(main)
+	if err != nil {
+		return err
 	}
 	others := otherCheckouts(main, wtPath)
 	parentEnvContent := readFileOrEmpty(filepath.Join(main, ".env"))
@@ -234,13 +243,14 @@ func runWorkspaceFix(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	// 5. Test database names shared with another checkout.
+	// 5. Test database names shared with another checkout, unless the site
+	// shares the parent's on purpose.
 	if testContent != "" && workspace.IsTracked(main, ".env.testing") {
-		hints = append(hints, "git tracks .env.testing, so routa leaves its test databases and Redis numbers alone")
+		hints = append(hints, "git tracks .env.testing, so routa leaves its test databases and Redis settings alone")
 		testContent = ""
 	}
 	testEnv := workspace.ParseEnv(testContent)
-	if testContent != "" {
+	if testContent != "" && !project.Workspace.SharesTestDatabases() {
 		parentTest := workspace.ParseEnv(parentTestContent)
 		usedByOthers := map[string]bool{}
 		for _, dir := range append([]string{main}, others...) {
@@ -264,12 +274,22 @@ func runWorkspaceFix(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	// 6. Redis numbers another checkout uses.
+	// 6. Redis keys another checkout shares: prefixes for a Laravel app,
+	// numbers for any other.
 	port := parentEnv["REDIS_PORT"]
 	if port == "" {
 		port = services.RedisDefaultPort
 	}
-	if strings.Contains(parentEnvContent, "REDIS_") || strings.Contains(envContent, "REDIS_") {
+	laravel := workspace.DetectLaravel(main)
+	parentTestEnv := workspace.ParseEnv(parentTestContent)
+	if laravel.App {
+		if workspace.MentionsRedis(parentEnv) || workspace.MentionsRedis(parentTestEnv) || workspace.MentionsRedis(workspace.ParseEnv(newEnv)) || workspace.MentionsRedis(testEnv) {
+			steps = append(steps, fixRedisPrefixes(append([]string{main}, others...), suffix, laravel.Horizon, []redisPrefixFile{
+				{label: ".env", env: workspace.ParseEnv(newEnv), parent: parentEnv, set: envSet, present: envContent != ""},
+				{label: ".env.testing", env: testEnv, parent: orEnv(parentTestEnv, testEnv), set: testSet, present: testContent != ""},
+			})...)
+		}
+	} else if strings.Contains(parentEnvContent, "REDIS_") || strings.Contains(envContent, "REDIS_") {
 		if owner := services.StandardPortOwner(port); owner != "" {
 			hints = append(hints, fmt.Sprintf("Redis is on port %s, the standard port for %s, so routa leaves its numbers alone", port, owner))
 		} else {
@@ -396,6 +416,67 @@ func runWorkspaceFix(_ *cobra.Command, args []string) error {
 		fmt.Println("note:", h)
 	}
 	return nil
+}
+
+// redisPrefixFile is one of a worktree's env files for fixRedisPrefixes: its
+// settings, the parent's copy to make prefixes from, and the keys to write.
+type redisPrefixFile struct {
+	label       string
+	env, parent map[string]string
+	set         map[string]string
+	present     bool
+}
+
+// fixRedisPrefixes gives a Laravel worktree's env file prefixes of its own
+// when it writes keys in the same Redis database, under the same
+// REDIS_PREFIX, as another checkout: the parent's, a worktree's, or a routa
+// site's. The database numbers stay as they are. A worktree with numbers of
+// its own, as an older routa gave them, shares nothing and is left alone.
+func fixRedisPrefixes(checkouts []string, suffix string, horizon bool, files []redisPrefixFile) []fixStep {
+	inUse := map[workspace.RedisSpace]bool{}
+	for _, dir := range checkouts {
+		for _, file := range []string{".env", ".env.testing"} {
+			data, err := os.ReadFile(filepath.Join(dir, file))
+			if err != nil {
+				continue
+			}
+			for _, s := range workspace.RedisSpaces(workspace.ParseEnv(string(data)), []string{"REDIS_PREFIX"}) {
+				inUse[s] = true
+			}
+		}
+	}
+	var steps []fixStep
+	for _, f := range files {
+		if !f.present {
+			continue
+		}
+		shared := false
+		for _, s := range workspace.RedisSpaces(f.env, []string{"REDIS_PREFIX"}) {
+			shared = shared || inUse[s]
+		}
+		if !shared {
+			continue
+		}
+		changed := map[string]string{}
+		for k, v := range workspace.WorkspaceRedisPrefixes(f.parent, horizon, suffix) {
+			if cur, ok := f.env[k]; !ok || cur != v {
+				changed[k] = v
+				f.set[k] = v
+			}
+		}
+		if len(changed) > 0 {
+			steps = append(steps, fixStep{what: fmt.Sprintf("%s: Redis keys share a database and prefix with another checkout, use %s", f.label, workspace.RedisPlan{}.Summary(changed))})
+		}
+	}
+	return steps
+}
+
+// orEnv is env, or fallback when env is empty.
+func orEnv(env, fallback map[string]string) map[string]string {
+	if len(env) == 0 {
+		return fallback
+	}
+	return env
 }
 
 // databaseNamedBy reports whether a checkout's .env names database name on

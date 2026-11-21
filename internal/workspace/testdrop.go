@@ -165,6 +165,10 @@ func StaleTestDatabases(existing, templates []string, liveSuffixes, liveNames ma
 	return stale
 }
 
+// TestCopyBase is the database a test copy belongs to: testing for
+// testing_test_3, and the name itself for anything else.
+func TestCopyBase(db string) string { return testCopyRE.ReplaceAllString(db, "") }
+
 // GroupTestSets counts databases per base name, folding _test_N copies into
 // their base, for reporting.
 func GroupTestSets(dbs []string) map[string]int {

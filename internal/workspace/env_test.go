@@ -156,3 +156,17 @@ func TestProjectDatabaseSame(t *testing.T) {
 		t.Fatal("sqlite comparison is wrong")
 	}
 }
+
+func TestRewriteEnvKeepsTheLinesQuotes(t *testing.T) {
+	in := "REDIS_PREFIX=\"{af}\"\nHORIZON_PREFIX='af-horizon:'\nREDIS_DB=3\n"
+	got := RewriteEnv(in, "", "", map[string]string{
+		"REDIS_PREFIX":   "{af-5382}",
+		"HORIZON_PREFIX": "5382_af-horizon:",
+		"REDIS_DB":       "4",
+		"NEW_PREFIX":     "{n-5382}",
+	})
+	want := "REDIS_PREFIX=\"{af-5382}\"\nHORIZON_PREFIX='5382_af-horizon:'\nREDIS_DB=4\nNEW_PREFIX=\"{n-5382}\"\n"
+	if got != want {
+		t.Fatalf("RewriteEnv =\n%s\nwant\n%s", got, want)
+	}
+}

@@ -63,6 +63,23 @@ when the app has artisan. When routa cannot give the workspace its own
 database, for example because .env uses DB_URL, it refuses before creating
 anything.
 
+When the parent's .env or .env.testing sets any REDIS_ key, the workspace also
+gets Redis keys of its own, in both files:
+
+- A Laravel app (an artisan file, and laravel/framework in composer.json)
+  keeps the parent's Redis database numbers and gets its own key prefixes:
+  REDIS_PREFIX, HORIZON_PREFIX when composer.json requires laravel/horizon or
+  the parent's file sets it, and any other REDIS_*_PREFIX the parent's file
+  sets. A value in braces gets the name inside them, so {shop} becomes
+  {shop-5194}; any other value gets the name in front, so laravel-database-
+  becomes 5194_laravel-database-. A file without REDIS_PREFIX starts from
+  Laravel's default for its APP_NAME. A flush, such as cache:clear with a
+  Redis cache, still empties the whole database, so it empties every
+  checkout's cache there.
+- Any other app does not read REDIS_PREFIX, so it gets REDIS_DB,
+  REDIS_CACHE_DB and any other REDIS_*_DB the parent sets, with numbers no
+  other checkout uses.
+
 Once the files and database are ready, add runs the site's setup from
 ` + workspace.ProjectFile + ` in its main checkout, plus any flags:
 
@@ -87,6 +104,13 @@ Once the files and database are ready, add runs the site's setup from
    starts them as systemd user units once setup succeeds; otherwise start
    them later with 'routa workspace start'. See 'routa workspace start --help'.
 
+By default the workspace's tests get databases of their own: each database
+name in the copied .env.testing gets the workspace name, so testing becomes
+testing_5194. With "testDatabases": "shared" under "workspace" in
+` + workspace.ProjectFile + `, the names stay the parent's, so every workspace's tests use
+the parent's test databases. That suits a test runner that makes and drops its
+own parallel copies and lets one run at a time use the test databases.
+
 --json prints progress to stderr and a summary to stdout, with each command's
 exit code and how long it took.`,
 	Args: cobra.ExactArgs(1),
@@ -97,8 +121,15 @@ var workspaceListCmd = &cobra.Command{
 	Use:     "list",
 	Aliases: []string{"ls"},
 	Short:   "List the worktrees of the current site's repository",
-	Args:    cobra.NoArgs,
-	RunE:    runWorkspaceList,
+	Long: `Lists each worktree with its branch, URL, and database, then warns about any
+that still share the parent's database, test databases, or Redis keys.
+
+A Laravel worktree shares the parent's Redis when its .env uses the same
+database numbers and the same REDIS_PREFIX (or Laravel's default for it) as
+the parent's. Any other worktree shares it when it uses the same numbers.
+'routa workspace fix <name>' gives such a worktree keys of its own.`,
+	Args: cobra.NoArgs,
+	RunE: runWorkspaceList,
 }
 
 var workspaceRmCmd = &cobra.Command{
@@ -111,13 +142,23 @@ ignored files such as vendor/ do not count. The branch is kept.
 
 The workspace's database is kept unless --drop-database is passed. routa only
 ever drops a database on the parent's server that differs from the parent's
-own; a SQLite file goes with the worktree.
+own, and never one that another checkout's .env.testing names for its tests
+(or a _test_N copy of it); a SQLite file goes with the worktree.
 
---drop-database also empties the Redis databases that the worktree's .env and
-.env.testing set for themselves (REDIS_DB, REDIS_CACHE_DB, and any other
-REDIS_*_DB). A number the main checkout, another worktree, or a routa site also
-sets is kept, as are Laravel's defaults (0 and 1), any Redis on another machine
-or on Redis's standard port, and any value that is not a plain number.`,
+--drop-database also clears the worktree's own Redis keys:
+
+- It empties the Redis databases that the worktree's .env and .env.testing set
+  for themselves (REDIS_DB, REDIS_CACHE_DB, and any other REDIS_*_DB). A number
+  the main checkout, another worktree, or a routa site also sets is kept, as
+  are Laravel's defaults (0 and 1) and any value that is not a plain number.
+- For a Laravel app, it deletes the keys under the worktree's own prefixes
+  (REDIS_PREFIX, HORIZON_PREFIX, and any other REDIS_*_PREFIX) in every other
+  database those files use, counting the defaults 0 and 1. A prefix is kept
+  when another checkout or routa site uses it, or one that overlaps it, in the
+  same database.
+
+Nothing is cleared on a Redis on another machine, on Redis's standard port,
+or set with REDIS_URL.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runWorkspaceRm,
 }
@@ -160,7 +201,7 @@ func init() {
 	workspaceAddCmd.Flags().StringSliceVar(&workspaceCopy, "copy", nil, "also copy this ignored path from the parent (repeatable)")
 	workspaceListCmd.Flags().BoolVar(&workspaceListJSON, "json", false, "emit machine-readable JSON")
 	workspaceRmCmd.Flags().BoolVar(&workspaceForce, "force", false, "remove even with uncommitted changes or untracked files")
-	workspaceRmCmd.Flags().BoolVar(&workspaceDropDB, "drop-database", false, "drop the workspace's own database and empty its own Redis databases")
+	workspaceRmCmd.Flags().BoolVar(&workspaceDropDB, "drop-database", false, "drop the workspace's own database and clear its own Redis databases and key prefixes")
 	workspaceCmd.AddCommand(workspaceAddCmd, workspaceListCmd, workspaceRmCmd, workspacePruneCmd)
 	rootCmd.AddCommand(workspaceCmd)
 }
@@ -333,7 +374,7 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 	}
 
 	newSite := workspaceSiteName(st, parent, main, wtPath)
-	envPlan, err := planWorkspaceEnv(main, wtPath, suffix, string(envContent))
+	envPlan, err := planWorkspaceEnv(main, wtPath, suffix, string(envContent), setup.project.Workspace.SharesTestDatabases())
 	if err != nil {
 		return fail(err)
 	}
@@ -348,7 +389,11 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 		if err := os.WriteFile(filepath.Join(wtPath, ".env.testing"), []byte(workspace.RewriteEnv(envPlan.testEnv, "", "", set)), 0o600); err != nil {
 			return fail(err)
 		}
-		fmt.Println("→ wrote .env.testing with the workspace's test databases")
+		if len(envPlan.tests.Set) > 0 {
+			fmt.Println("→ wrote .env.testing with the workspace's test databases")
+		} else {
+			fmt.Println("→ wrote .env.testing with the workspace's Redis settings")
+		}
 	}
 	tests, redis := envPlan.tests, envPlan.redis
 	if err := db.apply(); err != nil {
@@ -381,6 +426,8 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 	}
 	if len(tests.Databases) > 0 {
 		fmt.Fprintf(w, "  tests\t%s\n", strings.Join(tests.Databases, ", "))
+	} else if envPlan.sharedTests {
+		fmt.Fprintf(w, "  tests\tthe parent's test databases (testDatabases is shared)\n")
 	}
 	if len(redis.App) > 0 {
 		fmt.Fprintf(w, "  redis\t%s\n", redis.Summary(redis.App))
@@ -409,15 +456,19 @@ func runWorkspaceAdd(_ *cobra.Command, args []string) error {
 
 // workspaceEnv is what a new workspace changes in its .env and .env.testing.
 type workspaceEnv struct {
-	tests   workspace.TestEnvPlan
-	redis   workspace.RedisPlan
-	testEnv string // the copied .env.testing; empty when there is none to edit
+	tests       workspace.TestEnvPlan
+	redis       workspace.RedisPlan
+	testEnv     string // the copied .env.testing; empty when there is none to edit
+	sharedTests bool   // its tests use the parent's test databases on purpose
 }
 
-// planWorkspaceEnv gives the workspace its own test databases and Redis
-// databases. A .env.testing that git tracks is left alone, since the edit
-// would show up as a change to commit.
-func planWorkspaceEnv(main, wtPath, suffix, parentEnv string) (workspaceEnv, error) {
+// planWorkspaceEnv gives the workspace its own test databases, unless
+// sharedTests says the site's workspaces share the parent's, and its own
+// Redis keys: key prefixes for a Laravel app, which shares the parent's Redis
+// databases, or database numbers of its own for any other app. A .env.testing
+// that git tracks is left alone, since the edit would show up as a change to
+// commit.
+func planWorkspaceEnv(main, wtPath, suffix, parentEnv string, sharedTests bool) (workspaceEnv, error) {
 	var plan workspaceEnv
 	data, err := os.ReadFile(filepath.Join(wtPath, ".env.testing"))
 	hasTestEnv := err == nil
@@ -432,7 +483,16 @@ func planWorkspaceEnv(main, wtPath, suffix, parentEnv string) (workspaceEnv, err
 	if hasTestEnv {
 		plan.testEnv = string(data)
 		testEnv = workspace.ParseEnv(plan.testEnv)
-		plan.tests = workspace.PlanTestDatabases(testEnv, suffix)
+		if sharedTests {
+			plan.sharedTests = true
+		} else {
+			plan.tests = workspace.PlanTestDatabases(testEnv, suffix)
+		}
+	}
+	parent := workspace.ParseEnv(parentEnv)
+	if laravel := workspace.DetectLaravel(main); laravel.App {
+		plan.redis = workspace.PlanRedisPrefixes(parent, testEnv, hasTestEnv, laravel.Horizon, suffix)
+		return plan, nil
 	}
 
 	checkouts := []string{main}
@@ -443,7 +503,6 @@ func planWorkspaceEnv(main, wtPath, suffix, parentEnv string) (workspaceEnv, err
 			}
 		}
 	}
-	parent := workspace.ParseEnv(parentEnv)
 	port := parent["REDIS_PORT"]
 	if port == "" {
 		port = services.RedisDefaultPort
@@ -685,6 +744,15 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	parentDB, hasParentDB := checkoutDatabase(main)
+	// A Laravel app reads REDIS_PREFIX, so a worktree with its own prefix does
+	// not share the parent's Redis keys even in the same databases.
+	byPrefix := workspace.DetectLaravel(main).App
+	// A site whose workspaces share the parent's test databases on purpose
+	// gets no warning about it.
+	sharedTests := false
+	if project, err := workspace.LoadProject(main); err == nil {
+		sharedTests = project.Workspace.SharesTestDatabases()
+	}
 	entries := []workspaceListEntry{}
 	for _, wt := range wts {
 		e := workspaceListEntry{Name: site.WorktreeSuffix(main, wt.Path), Branch: wt.Branch, Path: wt.Path}
@@ -697,7 +765,7 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 		}
 		e.SharesParentTestDatabases = len(workspace.SharedTestDatabases(readEnvFile(filepath.Join(main, ".env.testing")), readEnvFile(filepath.Join(wt.Path, ".env.testing")))) > 0
 		if fileExists(filepath.Join(wt.Path, ".env")) {
-			e.SharesParentRedis = len(workspace.SharedRedisDatabases(readEnvFile(filepath.Join(main, ".env")), readEnvFile(filepath.Join(wt.Path, ".env")))) > 0
+			e.SharesParentRedis = len(workspace.SharedRedisDatabases(readEnvFile(filepath.Join(main, ".env")), readEnvFile(filepath.Join(wt.Path, ".env")), byPrefix)) > 0
 		}
 		entries = append(entries, e)
 	}
@@ -712,7 +780,7 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 	fmt.Fprintln(w, "NAME\tBRANCH\tURL\tDATABASE\tPATH")
 	var sharing, sharingTests, sharingRedis []string
 	for _, e := range entries {
-		if e.SharesParentTestDatabases {
+		if e.SharesParentTestDatabases && !sharedTests {
 			sharingTests = append(sharingTests, e.Name)
 		}
 		if e.SharesParentRedis {
@@ -756,7 +824,11 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 		if i == 0 {
 			fmt.Fprintln(cmd.OutOrStderr())
 		}
-		fmt.Fprintf(cmd.OutOrStderr(), "! %s uses the parent's Redis databases; give it its own REDIS_DB and REDIS_CACHE_DB in .env.\n", name)
+		if byPrefix {
+			fmt.Fprintf(cmd.OutOrStderr(), "! %s uses the parent's Redis databases and key prefix, so its cache and sessions mix with the parent's. Run 'routa workspace fix %s' to give it its own prefix.\n", name, name)
+		} else {
+			fmt.Fprintf(cmd.OutOrStderr(), "! %s uses the parent's Redis databases. Run 'routa workspace fix %s' to give it its own.\n", name, name)
+		}
 	}
 	return nil
 }
@@ -804,6 +876,8 @@ func runWorkspaceRm(_ *cobra.Command, args []string) error {
 	case drop.name == "":
 	case drop.sharedWith != "":
 		fmt.Printf("→ kept database %s: %s uses it too\n", drop.name, drop.sharedWith)
+	case drop.testsOf != "":
+		fmt.Printf("→ kept database %s: the .env.testing of %s names it for its tests\n", drop.name, drop.testsOf)
 	case drop.standardPort != "":
 		fmt.Printf("→ kept database %s: port %s is the standard port for %s, and routa never drops data there\n", drop.name, drop.via.Port, drop.standardPort)
 	case !workspaceDropDB:
@@ -836,6 +910,7 @@ type serverDatabase struct {
 	via          workspace.Database // connection to drop it through
 	standardPort string             // services whose standard port it is on; never dropped
 	sharedWith   string             // another checkout that uses it too; never dropped
+	testsOf      string             // a checkout whose .env.testing names it, or its base; never dropped
 }
 
 // workspaceServerDatabase returns the workspace's own database on the
@@ -850,10 +925,21 @@ func workspaceServerDatabase(main, wtPath string) serverDatabase {
 	// Connect through the parent's database: Postgres cannot drop the
 	// database a session is connected to.
 	drop := serverDatabase{name: own.Name, via: parent.Database, standardPort: services.StandardPortOwner(own.Port)}
-	for _, dir := range otherCheckouts(main, wtPath) {
+	others := otherCheckouts(main, wtPath)
+	for _, dir := range others {
 		if other, ok := checkoutDatabase(dir); ok && other.Same(own) {
 			drop.sharedWith = dir
 			break
+		}
+	}
+	// A test database, such as one the site's workspaces share, or one of
+	// its _test_N copies, is never dropped as a dev database.
+	for _, dir := range append([]string{main}, others...) {
+		for key, value := range readEnvFile(filepath.Join(dir, ".env.testing")) {
+			if workspace.IsTestDatabaseKey(key) && value == workspace.TestCopyBase(own.Name) {
+				drop.testsOf = dir
+				return drop
+			}
 		}
 	}
 	return drop
@@ -862,6 +948,10 @@ func workspaceServerDatabase(main, wtPath string) serverDatabase {
 // flushRedis empties one Redis database. Tests replace it.
 var flushRedis = services.FlushRedisDatabase
 
+// deleteRedisPrefix removes the keys under one prefix in one Redis database.
+// Tests replace it.
+var deleteRedisPrefix = services.DeleteRedisPrefix
+
 // redisDatabase is one Redis database a removed workspace had to itself.
 type redisDatabase struct {
 	addr               string // host:port
@@ -869,32 +959,66 @@ type redisDatabase struct {
 	number             int
 }
 
-// workspaceRedis is what rm does with a workspace's Redis databases: the
-// ones to empty, and why each other one is kept.
-type workspaceRedis struct {
-	clear []redisDatabase
-	kept  []string
+// redisPrefix is one key prefix a removed Laravel workspace had to itself,
+// and the databases to clear it in.
+type redisPrefix struct {
+	addr               string // host:port
+	username, password string // from the workspace's env file; never printed
+	prefix             string
+	databases          []int
 }
 
-// workspaceRedisDatabases finds the Redis databases the workspace's .env and
-// .env.testing set for themselves. It uses the same record of numbers in use
-// that 'workspace add' picks free ones from, so a number the main checkout,
-// another worktree or a routa site sets, or Laravel's default 0 or 1, is
-// never returned to clear. Neither is a database on another machine, on
-// Redis's standard port, or behind REDIS_URL, or a value that is not a plain
+// workspaceRedis is what rm does with a workspace's Redis keys: the
+// databases to empty, the prefixes to clear, and why each other one is kept.
+type workspaceRedis struct {
+	clear    []redisDatabase
+	prefixes []redisPrefix
+	kept     []string
+}
+
+// workspaceRedisFile is one of a workspace's env files and the Redis server
+// it points at. why is set when routa must leave that server alone.
+type workspaceRedisFile struct {
+	name string
+	env  map[string]string
+	addr string
+	why  string
+}
+
+// workspaceRedisDatabases finds the Redis keys the workspace's .env and
+// .env.testing had to themselves.
+//
+// Databases: the numbers the files set. It uses the same record of numbers in
+// use that 'workspace add' picks free ones from, so a number the main
+// checkout, another worktree or a routa site sets, or Laravel's default 0 or
+// 1, is never returned to empty, and neither is a value that is not a plain
 // number.
+//
+// Prefixes, for a Laravel app: each file's REDIS_PREFIX, HORIZON_PREFIX and
+// other REDIS_*_PREFIX, in every database the file uses that is not emptied
+// whole. A prefix is kept when a key under it could belong to another
+// checkout: when the main checkout, another worktree or a routa site uses a
+// prefix in one of those databases that starts with it, or that it starts
+// with.
+//
+// Neither is ever touched on a Redis on another machine, on Redis's standard
+// port, or behind REDIS_URL.
 func workspaceRedisDatabases(main, wtPath string) workspaceRedis {
 	checkouts := append([]string{main}, otherCheckouts(main, wtPath)...)
 	used := workspace.UsedRedisDatabases(checkouts)
 	owners := workspace.RedisDatabaseOwners(checkouts)
 	var out workspaceRedis
+	var files []workspaceRedisFile
 	seen := map[string]bool{}
 	for _, file := range []string{".env", ".env.testing"} {
 		data, err := os.ReadFile(filepath.Join(wtPath, file))
 		if err != nil {
 			continue
 		}
-		env := workspace.ParseEnv(string(data))
+		f := workspaceRedisFile{name: file, env: workspace.ParseEnv(string(data))}
+		f.addr, f.why = workspaceRedisServer(f.env)
+		files = append(files, f)
+		env := f.env
 		var keys []string
 		for key, value := range env {
 			if workspace.IsRedisDatabaseKey(key) && value != "" {
@@ -920,25 +1044,12 @@ func workspaceRedisDatabases(main, wtPath string) workspaceRedis {
 			continue
 		}
 		sort.Ints(numbers)
-		host, port := envSetting(env, "REDIS_HOST", "127.0.0.1"), envSetting(env, "REDIS_PORT", services.RedisDefaultPort)
-		why := ""
-		switch {
-		case envSetting(env, "REDIS_URL", "") != "":
-			why = "it sets REDIS_URL, which routa does not read"
-		case !loopbackHost(host):
-			why = "its REDIS_HOST is not this machine"
-		case services.ValidateRedisPort(port) != nil:
-			why = "its REDIS_PORT is not a port number"
-		case services.StandardPortOwner(port) != "":
-			why = fmt.Sprintf("port %s is the standard port for %s, and routa never clears data there", port, services.StandardPortOwner(port))
-		}
-		if why != "" {
-			out.kept = append(out.kept, fmt.Sprintf("Redis %s in %s: %s", redisNumbers(numbers), file, why))
+		if f.why != "" {
+			out.kept = append(out.kept, fmt.Sprintf("Redis %s in %s: %s", redisNumbers(numbers), file, f.why))
 			continue
 		}
-		addr := net.JoinHostPort(strings.Trim(host, "[]"), port)
 		for _, n := range numbers {
-			id := addr + "/" + strconv.Itoa(n)
+			id := f.addr + "/" + strconv.Itoa(n)
 			if seen[id] {
 				continue
 			}
@@ -952,32 +1063,166 @@ func workspaceRedisDatabases(main, wtPath string) workspaceRedis {
 				continue
 			}
 			out.clear = append(out.clear, redisDatabase{
-				addr:     addr,
+				addr:     f.addr,
 				username: envSetting(env, "REDIS_USERNAME", ""),
 				password: envSetting(env, "REDIS_PASSWORD", ""),
 				number:   n,
 			})
 		}
 	}
+
+	laravel := workspace.DetectLaravel(main)
+	if !laravel.App {
+		return out
+	}
+	others := checkoutRedisSpaces(checkouts)
+	emptied := map[string]bool{}
+	for _, db := range out.clear {
+		emptied[db.addr+"/"+strconv.Itoa(db.number)] = true
+	}
+	for _, f := range files {
+		if !workspace.MentionsRedis(f.env) {
+			continue
+		}
+		var prefixes []string
+		for _, key := range workspace.RedisPrefixKeys(f.env, laravel.Horizon) {
+			if p, ok := workspace.EffectiveRedisPrefix(f.env, key); ok && !slices.Contains(prefixes, p) {
+				prefixes = append(prefixes, p)
+			}
+		}
+		if f.why != "" {
+			out.kept = append(out.kept, fmt.Sprintf("Redis %s in %s: %s", redisPrefixList(prefixes), f.name, f.why))
+			continue
+		}
+		// A database emptied whole needs no prefix cleared in it.
+		var dbs []int
+		for _, n := range workspace.RedisDatabasesOf(f.env) {
+			if !emptied[f.addr+"/"+strconv.Itoa(n)] {
+				dbs = append(dbs, n)
+			}
+		}
+		if len(dbs) == 0 {
+			continue
+		}
+		for _, p := range prefixes {
+			if p == "" {
+				out.kept = append(out.kept, fmt.Sprintf("Redis keys in %s: its prefix is empty, so routa cannot tell its keys from other checkouts'", f.name))
+				continue
+			}
+			if owner, theirs := redisPrefixOverlap(others, p, dbs); owner != "" {
+				if theirs == p {
+					out.kept = append(out.kept, fmt.Sprintf("Redis prefix %s in %s: %s uses it too", p, f.name, owner))
+				} else {
+					out.kept = append(out.kept, fmt.Sprintf("Redis prefix %s in %s: %s uses %s, which overlaps it", p, f.name, owner, theirs))
+				}
+				continue
+			}
+			out.addPrefix(redisPrefix{
+				addr:      f.addr,
+				username:  envSetting(f.env, "REDIS_USERNAME", ""),
+				password:  envSetting(f.env, "REDIS_PASSWORD", ""),
+				prefix:    p,
+				databases: dbs,
+			})
+		}
+	}
 	return out
 }
 
-// clearWorkspaceRedis reports the kept databases and, when drop is set,
-// empties the rest. A database that cannot be emptied is a warning, since
-// the worktree is already gone by then.
+// addPrefix adds a prefix to clear, merging the databases of one already
+// planned for the same server.
+func (r *workspaceRedis) addPrefix(p redisPrefix) {
+	for i := range r.prefixes {
+		if r.prefixes[i].addr == p.addr && r.prefixes[i].prefix == p.prefix {
+			for _, n := range p.databases {
+				if !slices.Contains(r.prefixes[i].databases, n) {
+					r.prefixes[i].databases = append(r.prefixes[i].databases, n)
+				}
+			}
+			sort.Ints(r.prefixes[i].databases)
+			return
+		}
+	}
+	r.prefixes = append(r.prefixes, p)
+}
+
+// workspaceRedisServer reads the Redis server an env file points at, and why
+// routa must leave it alone, if it must.
+func workspaceRedisServer(env map[string]string) (addr, why string) {
+	host, port := envSetting(env, "REDIS_HOST", "127.0.0.1"), envSetting(env, "REDIS_PORT", services.RedisDefaultPort)
+	switch {
+	case envSetting(env, "REDIS_URL", "") != "":
+		why = "it sets REDIS_URL, which routa does not read"
+	case !loopbackHost(host):
+		why = "its REDIS_HOST is not this machine"
+	case services.ValidateRedisPort(port) != nil:
+		why = "its REDIS_PORT is not a port number"
+	case services.StandardPortOwner(port) != "":
+		why = fmt.Sprintf("port %s is the standard port for %s, and routa never clears data there", port, services.StandardPortOwner(port))
+	}
+	return net.JoinHostPort(strings.Trim(host, "[]"), port), why
+}
+
+// redisSpaceOwner is a Redis database and prefix one checkout uses.
+type redisSpaceOwner struct {
+	space workspace.RedisSpace
+	owner string
+}
+
+// checkoutRedisSpaces lists the Redis databases and prefixes the checkouts'
+// .env and .env.testing use. It counts HORIZON_PREFIX's default for every
+// checkout, whether or not it runs Horizon, so it errs on keeping keys.
+func checkoutRedisSpaces(checkouts []string) []redisSpaceOwner {
+	var out []redisSpaceOwner
+	for _, dir := range checkouts {
+		for _, file := range []string{".env", ".env.testing"} {
+			data, err := os.ReadFile(filepath.Join(dir, file))
+			if err != nil {
+				continue
+			}
+			env := workspace.ParseEnv(string(data))
+			for _, s := range workspace.RedisSpaces(env, workspace.RedisPrefixKeys(env, true)) {
+				out = append(out, redisSpaceOwner{space: s, owner: dir})
+			}
+		}
+	}
+	return out
+}
+
+// redisPrefixOverlap finds a checkout whose keys could fall under prefix in
+// one of dbs: one that uses, in the same database, a prefix that starts with
+// prefix or that prefix starts with. It returns that checkout and its prefix.
+func redisPrefixOverlap(others []redisSpaceOwner, prefix string, dbs []int) (owner, theirs string) {
+	for _, o := range others {
+		if slices.Contains(dbs, o.space.DB) && (strings.HasPrefix(o.space.Prefix, prefix) || strings.HasPrefix(prefix, o.space.Prefix)) {
+			return o.owner, o.space.Prefix
+		}
+	}
+	return "", ""
+}
+
+// clearWorkspaceRedis reports the kept databases and prefixes and, when drop
+// is set, empties the databases and clears the prefixes. One that cannot be
+// cleared is a warning, since the worktree is already gone by then.
 func clearWorkspaceRedis(stdout, stderr io.Writer, plan workspaceRedis, drop bool) {
 	for _, line := range plan.kept {
 		fmt.Fprintf(stdout, "→ kept %s\n", line)
 	}
-	if len(plan.clear) == 0 {
-		return
-	}
 	if !drop {
-		numbers := make([]int, 0, len(plan.clear))
-		for _, db := range plan.clear {
-			numbers = append(numbers, db.number)
+		if len(plan.clear) > 0 {
+			numbers := make([]int, 0, len(plan.clear))
+			for _, db := range plan.clear {
+				numbers = append(numbers, db.number)
+			}
+			fmt.Fprintf(stdout, "→ kept Redis %s; pass --drop-database to empty them with the workspace\n", redisNumbers(numbers))
 		}
-		fmt.Fprintf(stdout, "→ kept Redis %s; pass --drop-database to empty them with the workspace\n", redisNumbers(numbers))
+		if len(plan.prefixes) > 0 {
+			prefixes := make([]string, 0, len(plan.prefixes))
+			for _, p := range plan.prefixes {
+				prefixes = append(prefixes, p.prefix)
+			}
+			fmt.Fprintf(stdout, "→ kept Redis %s; pass --drop-database to clear them with the workspace\n", redisPrefixList(prefixes))
+		}
 		return
 	}
 	for _, db := range plan.clear {
@@ -987,6 +1232,35 @@ func clearWorkspaceRedis(stdout, stderr io.Writer, plan workspaceRedis, drop boo
 		}
 		fmt.Fprintf(stdout, "→ cleared Redis database %d on %s\n", db.number, db.addr)
 	}
+	for _, p := range plan.prefixes {
+		var cleared []int
+		keys := 0
+		for _, n := range p.databases {
+			removed, err := deleteRedisPrefix(p.addr, p.username, p.password, n, p.prefix)
+			keys += removed
+			if err != nil {
+				fmt.Fprintf(stderr, "  warning: could not clear Redis prefix %s in database %d on %s: %v\n", p.prefix, n, p.addr, err)
+				continue
+			}
+			cleared = append(cleared, n)
+		}
+		if len(cleared) == 0 {
+			continue
+		}
+		noun := "keys"
+		if keys == 1 {
+			noun = "key"
+		}
+		fmt.Fprintf(stdout, "→ cleared Redis prefix %s in %s on %s (%d %s)\n", p.prefix, redisNumbers(cleared), p.addr, keys, noun)
+	}
+}
+
+// redisPrefixList reads "prefix {a}" or "prefixes {a}, {b}".
+func redisPrefixList(prefixes []string) string {
+	if len(prefixes) == 1 {
+		return "prefix " + prefixes[0]
+	}
+	return "prefixes " + strings.Join(prefixes, ", ")
 }
 
 // envSetting reads a .env value, treating Laravel's "null" as unset.

@@ -632,20 +632,16 @@ checkout has open. Pass `--from HEAD` to start from that branch instead, or
     workspace name, so `aff_main` becomes `aff_5194`. A SQLite file is copied
     to the same place in the worktree.
   - `empty` creates that database empty and runs `php artisan migrate`.
-- Gives the workspace its own test databases and Redis databases in its copy
-  of `.env.testing`. Test databases are created on the fly, so they are only
+- Gives the workspace its own test databases in its copy of `.env.testing`,
+  unless the site shares them (see
+  [Shared test databases](#shared-test-databases)).
+  Test databases are created on the fly, so they are only
   renamed: every database name gets the workspace name, so `testing` becomes
   `testing_5194` and `affiliate_testing` becomes `affiliate_testing_5194`.
   Laravel's parallel copies follow as `testing_5194_test_1`. A `.env.testing`
   that git tracks is left alone.
-- Gives the workspace its own Redis databases, one set in `.env` for the app
-  and another in `.env.testing` for its tests. `REDIS_DB`, `REDIS_CACHE_DB`,
-  and any other `REDIS_*_DB` the parent sets get numbers no other checkout
-  uses, picked from the top down. Separate databases, not just a key prefix,
-  because a flush such as `cache:clear` with a Redis cache, or a test that
-  clears the cache, empties a whole database. This needs routa's Redis, which
-  has 64 databases (four per workspace); other Redis servers are assumed to
-  have 16.
+- Gives the workspace Redis keys of its own, in `.env` for the app and in
+  `.env.testing` for its tests. See [Redis in workspaces](#redis-in-workspaces).
 
 Workspaces never share the parent's database, so a migration, `migrate:fresh`,
 or seeder run in a workspace cannot change the parent's data. When routa
@@ -653,8 +649,11 @@ cannot give a workspace its own database, for example because `.env` uses
 `DB_URL` or a `DB_CONNECTION` routa does not support, `add` refuses before
 creating anything. `routa workspace list` marks any worktree whose `.env`
 still points at the parent's database, whose `.env.testing` still names the
-parent's test databases, or whose `.env` uses the parent's Redis databases,
-such as one an agent created by hand.
+parent's test databases, or whose `.env` shares the parent's Redis keys, such
+as one an agent created by hand. A Laravel worktree shares them when it uses
+the same database numbers and the same `REDIS_PREFIX` (or Laravel's default
+for it) as the parent; any other worktree, when it uses the same numbers.
+`routa workspace fix <name>` gives it keys of its own.
 
 Cloning uses the credentials in the parent's `.env`. A MySQL or MariaDB copy
 never leaves the server: routa creates the tables from a schema-only dump,
@@ -667,19 +666,33 @@ that version.
 `rm` removes the worktree and stops serving it. git refuses when the worktree
 has changes or untracked files unless you pass `--force`; ignored files such as
 `vendor/` do not count. The branch is kept. The workspace's dev database is kept
-unless you pass `--drop-database`; routa never drops the parent's, or one that
-another worktree or routa site still names in its `.env`. A SQLite file goes
-with the worktree.
+unless you pass `--drop-database`; routa never drops the parent's, one that
+another worktree or routa site still names in its `.env`, or a test database
+that another checkout's `.env.testing` names (or one of its `_test_N` copies).
+A SQLite file goes with the worktree.
 
-`--drop-database` also empties the workspace's own Redis databases: the
-`REDIS_DB`, `REDIS_CACHE_DB` and other `REDIS_*_DB` numbers its `.env` and
-`.env.testing` set, so the next workspace given those numbers starts empty.
-routa keeps a number that the main checkout, another worktree or a routa site
-also sets, Laravel's defaults 0 and 1, and any value that is not a plain number.
-It never empties a Redis on another machine, on the standard port, or set with
-`REDIS_URL`. Each one emptied prints a line such as
-`→ cleared Redis database 37 on 127.0.0.1:6380`, and each one kept says why.
-Without `--drop-database`, `rm` lists the numbers it left alone.
+`--drop-database` also clears the workspace's own Redis keys:
+
+- It empties the workspace's own Redis databases: the `REDIS_DB`,
+  `REDIS_CACHE_DB` and other `REDIS_*_DB` numbers its `.env` and
+  `.env.testing` set, so the next workspace given those numbers starts empty.
+  routa keeps a number that the main checkout, another worktree or a routa
+  site also sets, Laravel's defaults 0 and 1, and any value that is not a
+  plain number.
+- For a Laravel app, it deletes the keys under the workspace's own prefixes,
+  `REDIS_PREFIX`, `HORIZON_PREFIX` and any other `REDIS_*_PREFIX`, in each
+  other database its `.env` and `.env.testing` use, counting the defaults 0
+  and 1. It finds them with `SCAN` and removes them with `UNLINK`, so other
+  keys in the database stay. routa keeps a prefix when the main checkout,
+  another worktree or a routa site uses the same prefix, or one that overlaps
+  it, in the same database.
+
+It never clears a Redis on another machine, on the standard port, or set with
+`REDIS_URL`. Each database emptied prints a line such as
+`→ cleared Redis database 37 on 127.0.0.1:6380`, each prefix cleared a line
+such as `→ cleared Redis prefix {shop-5194} in databases 0, 1 on
+127.0.0.1:6380 (42 keys)`, and each one kept says why. Without
+`--drop-database`, `rm` lists the numbers and prefixes it left alone.
 
 After removing the worktree, `rm` drops the test databases that removed
 worktrees left behind, including this one's. `routa workspace prune` does the
@@ -698,6 +711,48 @@ keep cleanup away from anything else:
 - The main checkout's own test databases, any database a routa site's or
   worktree's `.env` or `.env.testing` names, and any database with an open
   connection are never dropped.
+
+### Redis in workspaces
+
+What a workspace gets depends on the app:
+
+- **A Laravel app that uses Redis** gets key prefixes of its own and keeps
+  the parent's Redis database numbers. routa counts an app as Laravel when it
+  has an `artisan` file and `composer.json` requires `laravel/framework`. It
+  uses Redis when the parent's `.env` or `.env.testing` sets any `REDIS_` key.
+- **Any other app that uses Redis** gets Redis database numbers of its own,
+  since it does not read `REDIS_PREFIX`.
+- **An app that does not use Redis** gets no Redis lines at all.
+
+For a Laravel app, each file gets `REDIS_PREFIX`, which every key goes under,
+cache, queue, and session keys included. It also gets `HORIZON_PREFIX` when
+`composer.json` requires `laravel/horizon` or the parent's file already sets
+it, and any other `REDIS_*_PREFIX` the parent's file sets. Each one is made
+from the parent's value in the same file:
+
+- A value in braces, a Redis cluster hash tag, gets the workspace name inside
+  them: `{shop}` becomes `{shop-5194}`.
+- Any other value gets the name in front: `shop-database-` becomes
+  `5194_shop-database-`. With the name first, one workspace's keys stay apart
+  from the parent's and from every other workspace's.
+- A file without the key starts from Laravel's default for its `APP_NAME`,
+  such as `shop-database-` for `REDIS_PREFIX` and `shop_horizon:` for
+  `HORIZON_PREFIX`. Without `APP_NAME`, Laravel uses `laravel`.
+
+The prefixes keep each checkout's keys apart, but every checkout still shares
+the same databases. A flush empties a whole database, so `cache:clear` with a
+Redis cache, or a test that flushes Redis, empties every checkout's cache in
+that database, the parent's included. Queues and Horizon in two checkouts
+stay apart, since their keys carry the prefix.
+
+For any other app, `REDIS_DB`, `REDIS_CACHE_DB`, and any other `REDIS_*_DB`
+the parent sets get numbers no other checkout uses, picked from the top down,
+one set for `.env` and another for `.env.testing`. This needs routa's Redis,
+which has 64 databases (four per workspace); other Redis servers are assumed
+to have 16.
+
+Workspaces made by an older routa, with Redis database numbers of their own,
+keep working as they are.
 
 ### Setup steps
 
@@ -748,6 +803,36 @@ with the same flags.
 each service, each command with its exit code and how long it took (plus the
 end of its output when it failed), and each action.
 
+#### Shared test databases
+
+By default each workspace's tests get databases of their own, such as
+`testing_5194`. A site can instead have every workspace run its tests against
+the parent's test databases:
+
+```json
+{
+  "workspace": {
+    "testDatabases": "shared"
+  }
+}
+```
+
+This suits a project whose test runner makes and drops its own parallel
+copies, and holds a lock so only one run uses the test databases at a time.
+Workspaces on different branches then share one set of test databases, which
+is rebuilt when their migrations differ. The default is `"own"`.
+
+With `"shared"`:
+
+- `add` leaves the database names in the copied `.env.testing` as the parent
+  has them. The workspace's Redis settings in that file still get their own
+  prefixes or numbers.
+- `list` does not warn that a worktree's tests use the parent's test
+  databases.
+- `fix` does not rename them.
+- `rm` and `prune` never drop a database that the parent's `.env.testing`
+  names, or its `_test_N` copies. That holds in the default mode too.
+
 ### Actions
 
 Actions are commands that keep running for a workspace, such as a queue
@@ -788,9 +873,11 @@ system service or someone else. Workspaces never change data there:
   since it cannot copy the database without writing to that server and
   workspaces never share it. Move the app to a routa database first.
 - `rm --drop-database` and test cleanup never drop anything there, and `rm`
-  never empties a Redis database there.
+  never empties a Redis database or clears a prefix there.
 - A Redis on its standard port gets no workspace numbers, since routa cannot
-  see which databases other apps use; the workspace keeps the parent's.
+  see which databases other apps use; the workspace keeps the parent's. A
+  Laravel app still gets its own prefixes there, since a prefix changes no
+  data.
 
 `routa workspace fix <name>` brings a worktree made by hand, or by an older
 routa, in line with what `add` sets up, changing only what is wrong. It
@@ -799,8 +886,10 @@ worktree's own copy, copies missing working files, turns an unedited copy of
 `AGENTS.local.md` or `CLAUDE.local.md` into a link, renames the parent's or
 another worktree's hosts in `.env`, gives the worktree its own dev database
 when it shares one or points at one that is gone, renames test databases it
-shares, and replaces Redis numbers another checkout uses. Test database names
-that are already the worktree's own are kept. Run it with `--dry-run` first.
+shares, and gives the worktree Redis keys of its own when another checkout
+shares them: prefixes for a Laravel app, which keeps its database numbers,
+and free numbers for any other app. Test database names that are already the
+worktree's own are kept. Run it with `--dry-run` first.
 
 routa also serves git worktrees it did not create, such as the ones coding
 agents make inside a repository. A worktree at
@@ -827,8 +916,10 @@ package manager. It writes `routa-redis.service`, stores Redis data under
 Redis-compatible service such as Valkey.
 
 routa's Redis offers 64 databases instead of Redis's default 16, so each
-[workspace](#workspaces) can have its own. Run `routa redis restart` once to
-pick this up on an existing install; data is kept.
+[workspace](#workspaces) of an app that is not Laravel can have its own.
+Laravel workspaces share the parent's databases and use key prefixes instead;
+see [Redis in workspaces](#redis-in-workspaces). Run `routa redis restart` once
+to pick this up on an existing install; data is kept.
 
 ## Mailpit
 

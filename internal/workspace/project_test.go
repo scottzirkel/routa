@@ -55,6 +55,7 @@ func TestLoadProjectRefusesMistakes(t *testing.T) {
 		"empty action":     `{"workspace": {"actions": {"queue": ""}}}`,
 		"not json":         `workspace: {}`,
 		"wrong value type": `{"workspace": {"run": "npm run build"}}`,
+		"bad test mode":    `{"workspace": {"testDatabases": "same"}}`,
 	}
 	for name, content := range cases {
 		if _, err := LoadProject(writeProject(t, content)); err == nil || !strings.Contains(err.Error(), ProjectFile) {
@@ -72,6 +73,19 @@ func TestValidateActionName(t *testing.T) {
 	for _, bad := range []string{"", "Queue", "queue_high", "-queue", "queue-", "q.ueue", strings.Repeat("a", 41)} {
 		if err := ValidateActionName(bad); err == nil {
 			t.Errorf("%q: accepted", bad)
+		}
+	}
+}
+
+func TestLoadProjectReadsTheTestDatabaseMode(t *testing.T) {
+	for content, shared := range map[string]bool{
+		`{"workspace": {}}`:                          false,
+		`{"workspace": {"testDatabases": "own"}}`:    false,
+		`{"workspace": {"testDatabases": "shared"}}`: true,
+	} {
+		p, err := LoadProject(writeProject(t, content))
+		if err != nil || p.Workspace.SharesTestDatabases() != shared {
+			t.Errorf("%s: shared = %v, %v; want %v", content, p.Workspace.SharesTestDatabases(), err, shared)
 		}
 	}
 }

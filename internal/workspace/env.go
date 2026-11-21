@@ -45,9 +45,9 @@ func envValue(raw string) string {
 }
 
 // RewriteEnv renames the site host fromName.test, and every subdomain of it,
-// to toName.test in each value, then sets the given keys. Comment lines and
-// untouched lines keep their exact text. Keys that are not present yet are
-// appended.
+// to toName.test in each value, then sets the given keys. A key that is set
+// keeps the quotes its line had. Comment lines and untouched lines keep their
+// exact text. Keys that are not present yet are appended.
 func RewriteEnv(content, fromName, toName string, set map[string]string) string {
 	lines := strings.Split(content, "\n")
 	done := map[string]bool{}
@@ -57,7 +57,7 @@ func RewriteEnv(content, fromName, toName string, set map[string]string) string 
 			continue
 		}
 		if value, ok := set[m[2]]; ok {
-			lines[i] = m[1] + m[2] + "=" + quoteEnv(value)
+			lines[i] = m[1] + m[2] + "=" + quoteEnvLike(value, m[4])
 			done[m[2]] = true
 			continue
 		}
@@ -112,9 +112,25 @@ func hostChar(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-'
 }
 
+// quoteEnv quotes a value when dotenv needs it to: empty values, spaces,
+// comment marks, quotes, $ references, backslashes and braces.
 func quoteEnv(value string) string {
-	if value == "" || strings.ContainsAny(value, " \t#\"'$\\") {
+	if value == "" || strings.ContainsAny(value, " \t#\"'$\\{}") {
 		return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
 	}
 	return value
+}
+
+// quoteEnvLike quotes value the way the line's old raw value was quoted, so
+// REDIS_PREFIX="{af}" stays in double quotes. Single quotes are kept when the
+// value has none of its own; anything else falls back to quoteEnv.
+func quoteEnvLike(value, raw string) string {
+	raw = strings.TrimSpace(raw)
+	switch {
+	case strings.HasPrefix(raw, `"`):
+		return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
+	case strings.HasPrefix(raw, "'") && !strings.Contains(value, "'"):
+		return "'" + value + "'"
+	}
+	return quoteEnv(value)
 }
